@@ -1,0 +1,124 @@
+[0.939s] Invoking command in '/home/nisanth/carla_ros_ws/src/ros-bridge/carla_ros_bridge': AMENT_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/carla_spawn_objects:/home/nisanth/carla_ros_ws/install/carla_manual_control:/home/nisanth/carla_ros_ws/install/ros_compatibility:/home/nisanth/carla_ros_ws/install/carla_msgs:/home/nisanth/carla_ros_ws/install/carla_common:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs LD_LIBRARY_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs/lib:${LD_LIBRARY_PATH} PYTHONPATH=/home/nisanth/carla_ros_ws/build/carla_ros_bridge/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/install/carla_spawn_objects/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/install/carla_manual_control/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/install/ros_compatibility/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/install/carla_msgs/local/lib/python3.10/dist-packages:/home/nisanth/carla_ros_ws/install/carla_common/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../../build/carla_ros_bridge build --build-base /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build install --record /home/nisanth/carla_ros_ws/build/carla_ros_bridge/install.log --single-version-externally-managed install_data
+[1.116s] running egg_info
+[1.116s] creating ../../../build/carla_ros_bridge/carla_ros_bridge.egg-info
+[1.117s] writing ../../../build/carla_ros_bridge/carla_ros_bridge.egg-info/PKG-INFO
+[1.117s] writing dependency_links to ../../../build/carla_ros_bridge/carla_ros_bridge.egg-info/dependency_links.txt
+[1.117s] writing entry points to ../../../build/carla_ros_bridge/carla_ros_bridge.egg-info/entry_points.txt
+[1.117s] writing requirements to ../../../build/carla_ros_bridge/carla_ros_bridge.egg-info/requires.txt
+[1.117s] writing top-level names to ../../../build/carla_ros_bridge/carla_ros_bridge.egg-info/top_level.txt
+[1.118s] writing manifest file '../../../build/carla_ros_bridge/carla_ros_bridge.egg-info/SOURCES.txt'
+[1.120s] reading manifest file '../../../build/carla_ros_bridge/carla_ros_bridge.egg-info/SOURCES.txt'
+[1.121s] writing manifest file '../../../build/carla_ros_bridge/carla_ros_bridge.egg-info/SOURCES.txt'
+[1.121s] running build
+[1.121s] running build_py
+[1.121s] creating /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build
+[1.122s] creating /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib
+[1.122s] creating /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.122s] copying src/carla_ros_bridge/odom_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.123s] copying src/carla_ros_bridge/ego_vehicle.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.123s] copying src/carla_ros_bridge/debug_helper.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.124s] copying src/carla_ros_bridge/opendrive_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.124s] copying src/carla_ros_bridge/carla_status_publisher.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.124s] copying src/carla_ros_bridge/actor_factory.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.125s] copying src/carla_ros_bridge/gnss.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.125s] copying src/carla_ros_bridge/lane_invasion_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.125s] copying src/carla_ros_bridge/speedometer_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.126s] copying src/carla_ros_bridge/radar.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.126s] copying src/carla_ros_bridge/actor_control.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.126s] copying src/carla_ros_bridge/actor_list_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.127s] copying src/carla_ros_bridge/marker_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.127s] copying src/carla_ros_bridge/traffic_participant.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.127s] copying src/carla_ros_bridge/spectator.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.128s] copying src/carla_ros_bridge/collision_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.128s] copying src/carla_ros_bridge/camera.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.128s] copying src/carla_ros_bridge/lidar.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.129s] copying src/carla_ros_bridge/walker.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.129s] copying src/carla_ros_bridge/object_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.130s] copying src/carla_ros_bridge/tf_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.130s] copying src/carla_ros_bridge/bridge.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.130s] copying src/carla_ros_bridge/vehicle.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.131s] copying src/carla_ros_bridge/world_info.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.131s] copying src/carla_ros_bridge/__init__.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.131s] copying src/carla_ros_bridge/traffic.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.131s] copying src/carla_ros_bridge/traffic_lights_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.132s] copying src/carla_ros_bridge/rss_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.132s] copying src/carla_ros_bridge/pseudo_actor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.132s] copying src/carla_ros_bridge/imu.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.133s] copying src/carla_ros_bridge/sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.133s] copying src/carla_ros_bridge/actor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.133s] copying src/carla_ros_bridge/CARLA_VERSION -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+[1.134s] running install
+[1.134s] running install_lib
+[1.135s] creating /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.135s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/odom_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.136s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/ego_vehicle.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.136s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/debug_helper.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.136s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/opendrive_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.136s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/carla_status_publisher.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.136s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/CARLA_VERSION -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.136s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/actor_factory.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.137s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/gnss.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.137s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/lane_invasion_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.137s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/speedometer_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.137s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/radar.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.137s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/actor_control.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.137s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/actor_list_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.138s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/marker_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.138s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/traffic_participant.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.138s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/spectator.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.138s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/collision_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.139s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/camera.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.139s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/lidar.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.139s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/walker.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.139s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/object_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.139s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/tf_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.139s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/bridge.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.140s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/vehicle.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.140s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/world_info.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.140s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/__init__.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.140s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/traffic.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.140s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/traffic_lights_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.140s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/rss_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.140s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/pseudo_actor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.141s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/imu.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.141s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.141s] copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/actor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+[1.142s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/odom_sensor.py to odom_sensor.cpython-310.pyc
+[1.142s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/ego_vehicle.py to ego_vehicle.cpython-310.pyc
+[1.144s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/debug_helper.py to debug_helper.cpython-310.pyc
+[1.144s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/opendrive_sensor.py to opendrive_sensor.cpython-310.pyc
+[1.145s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/carla_status_publisher.py to carla_status_publisher.cpython-310.pyc
+[1.145s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/actor_factory.py to actor_factory.cpython-310.pyc
+[1.147s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/gnss.py to gnss.cpython-310.pyc
+[1.147s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/lane_invasion_sensor.py to lane_invasion_sensor.cpython-310.pyc
+[1.147s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/speedometer_sensor.py to speedometer_sensor.cpython-310.pyc
+[1.148s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/radar.py to radar.cpython-310.pyc
+[1.148s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/actor_control.py to actor_control.cpython-310.pyc
+[1.149s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/actor_list_sensor.py to actor_list_sensor.cpython-310.pyc
+[1.149s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/marker_sensor.py to marker_sensor.cpython-310.pyc
+[1.150s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/traffic_participant.py to traffic_participant.cpython-310.pyc
+[1.150s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/spectator.py to spectator.cpython-310.pyc
+[1.150s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/collision_sensor.py to collision_sensor.cpython-310.pyc
+[1.151s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/camera.py to camera.cpython-310.pyc
+[1.152s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/lidar.py to lidar.cpython-310.pyc
+[1.153s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/walker.py to walker.cpython-310.pyc
+[1.153s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/object_sensor.py to object_sensor.cpython-310.pyc
+[1.153s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/tf_sensor.py to tf_sensor.cpython-310.pyc
+[1.154s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/bridge.py to bridge.cpython-310.pyc
+[1.155s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/vehicle.py to vehicle.cpython-310.pyc
+[1.155s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/world_info.py to world_info.cpython-310.pyc
+[1.156s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/__init__.py to __init__.cpython-310.pyc
+[1.156s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/traffic.py to traffic.cpython-310.pyc
+[1.156s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/traffic_lights_sensor.py to traffic_lights_sensor.cpython-310.pyc
+[1.157s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/rss_sensor.py to rss_sensor.cpython-310.pyc
+[1.157s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/pseudo_actor.py to pseudo_actor.cpython-310.pyc
+[1.157s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/imu.py to imu.cpython-310.pyc
+[1.158s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/sensor.py to sensor.cpython-310.pyc
+[1.159s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/actor.py to actor.cpython-310.pyc
+[1.159s] running install_data
+[1.161s] running install_egg_info
+[1.162s] Copying ../../../build/carla_ros_bridge/carla_ros_bridge.egg-info to /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge-0.0.0-py3.10.egg-info
+[1.164s] running install_scripts
+[1.179s] Installing bridge script to /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/carla_ros_bridge
+[1.180s] writing list of installed files to '/home/nisanth/carla_ros_ws/build/carla_ros_bridge/install.log'
+[1.196s] Invoked command in '/home/nisanth/carla_ros_ws/src/ros-bridge/carla_ros_bridge' returned '0': AMENT_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/carla_spawn_objects:/home/nisanth/carla_ros_ws/install/carla_manual_control:/home/nisanth/carla_ros_ws/install/ros_compatibility:/home/nisanth/carla_ros_ws/install/carla_msgs:/home/nisanth/carla_ros_ws/install/carla_common:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs LD_LIBRARY_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs/lib:${LD_LIBRARY_PATH} PYTHONPATH=/home/nisanth/carla_ros_ws/build/carla_ros_bridge/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/install/carla_spawn_objects/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/install/carla_manual_control/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/install/ros_compatibility/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/install/carla_msgs/local/lib/python3.10/dist-packages:/home/nisanth/carla_ros_ws/install/carla_common/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../../build/carla_ros_bridge build --build-base /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build install --record /home/nisanth/carla_ros_ws/build/carla_ros_bridge/install.log --single-version-externally-managed install_data

@@ -1,0 +1,1 @@
+/home/nisanth/carla_ros_ws/build/pcl_recorder/ament_cmake_environment_hooks/local_setup.bash

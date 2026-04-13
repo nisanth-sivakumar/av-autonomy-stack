@@ -1,0 +1,6 @@
+Invoking command in '/home/nisanth/carla_ros_ws/build/carla_msgs': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake /home/nisanth/carla_ros_ws/src/ros-bridge/carla_msgs -DCMAKE_INSTALL_PREFIX=/home/nisanth/carla_ros_ws/install/carla_msgs
+Invoked command in '/home/nisanth/carla_ros_ws/build/carla_msgs' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake /home/nisanth/carla_ros_ws/src/ros-bridge/carla_msgs -DCMAKE_INSTALL_PREFIX=/home/nisanth/carla_ros_ws/install/carla_msgs
+Invoking command in '/home/nisanth/carla_ros_ws/build/carla_msgs': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --build /home/nisanth/carla_ros_ws/build/carla_msgs -- -j12 -l12
+Invoked command in '/home/nisanth/carla_ros_ws/build/carla_msgs' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --build /home/nisanth/carla_ros_ws/build/carla_msgs -- -j12 -l12
+Invoking command in '/home/nisanth/carla_ros_ws/build/carla_msgs': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --install /home/nisanth/carla_ros_ws/build/carla_msgs
+Invoked command in '/home/nisanth/carla_ros_ws/build/carla_msgs' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --install /home/nisanth/carla_ros_ws/build/carla_msgs

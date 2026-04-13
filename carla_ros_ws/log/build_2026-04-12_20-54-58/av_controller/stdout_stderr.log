@@ -1,0 +1,31 @@
+running egg_info
+creating ../../build/av_controller/av_controller.egg-info
+writing ../../build/av_controller/av_controller.egg-info/PKG-INFO
+writing dependency_links to ../../build/av_controller/av_controller.egg-info/dependency_links.txt
+writing entry points to ../../build/av_controller/av_controller.egg-info/entry_points.txt
+writing requirements to ../../build/av_controller/av_controller.egg-info/requires.txt
+writing top-level names to ../../build/av_controller/av_controller.egg-info/top_level.txt
+writing manifest file '../../build/av_controller/av_controller.egg-info/SOURCES.txt'
+reading manifest file '../../build/av_controller/av_controller.egg-info/SOURCES.txt'
+writing manifest file '../../build/av_controller/av_controller.egg-info/SOURCES.txt'
+running build
+running build_py
+creating /home/nisanth/carla_ros_ws/build/av_controller/build
+creating /home/nisanth/carla_ros_ws/build/av_controller/build/lib
+creating /home/nisanth/carla_ros_ws/build/av_controller/build/lib/av_controller
+copying av_controller/__init__.py -> /home/nisanth/carla_ros_ws/build/av_controller/build/lib/av_controller
+running install
+running install_lib
+creating /home/nisanth/carla_ros_ws/install/av_controller/lib/python3.10/site-packages/av_controller
+copying /home/nisanth/carla_ros_ws/build/av_controller/build/lib/av_controller/__init__.py -> /home/nisanth/carla_ros_ws/install/av_controller/lib/python3.10/site-packages/av_controller
+byte-compiling /home/nisanth/carla_ros_ws/install/av_controller/lib/python3.10/site-packages/av_controller/__init__.py to __init__.cpython-310.pyc
+running install_data
+creating /home/nisanth/carla_ros_ws/install/av_controller/share/ament_index
+creating /home/nisanth/carla_ros_ws/install/av_controller/share/ament_index/resource_index
+creating /home/nisanth/carla_ros_ws/install/av_controller/share/ament_index/resource_index/packages
+copying resource/av_controller -> /home/nisanth/carla_ros_ws/install/av_controller/share/ament_index/resource_index/packages
+copying package.xml -> /home/nisanth/carla_ros_ws/install/av_controller/share/av_controller
+running install_egg_info
+Copying ../../build/av_controller/av_controller.egg-info to /home/nisanth/carla_ros_ws/install/av_controller/lib/python3.10/site-packages/av_controller-0.0.0-py3.10.egg-info
+running install_scripts
+writing list of installed files to '/home/nisanth/carla_ros_ws/build/av_controller/install.log'

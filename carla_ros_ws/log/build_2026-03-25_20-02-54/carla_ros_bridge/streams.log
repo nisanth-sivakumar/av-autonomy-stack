@@ -1,0 +1,28 @@
+[1.828s] Invoking command in '/home/nisanth/carla_ros_ws/build/carla_ros_bridge': AMENT_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/carla_spawn_objects:/home/nisanth/carla_ros_ws/install/carla_manual_control:/home/nisanth/carla_ros_ws/install/ros_compatibility:/home/nisanth/carla_ros_ws/install/carla_msgs:/home/nisanth/carla_ros_ws/install/carla_common:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs LD_LIBRARY_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs/lib:${LD_LIBRARY_PATH} PYTHONPATH=/home/nisanth/carla_ros_ws/build/carla_ros_bridge/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/build/carla_spawn_objects:/home/nisanth/carla_ros_ws/install/carla_spawn_objects/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/build/carla_manual_control/src:/home/nisanth/carla_ros_ws/install/carla_manual_control/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/build/ros_compatibility/src:/home/nisanth/carla_ros_ws/install/ros_compatibility/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/install/carla_msgs/local/lib/python3.10/dist-packages:/home/nisanth/carla_ros_ws/build/carla_common/src:/home/nisanth/carla_ros_ws/install/carla_common/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build --no-deps symlink_data
+[2.173s] running develop
+[2.396s] running egg_info
+[2.396s] creating src/carla_ros_bridge.egg-info
+[2.398s] writing src/carla_ros_bridge.egg-info/PKG-INFO
+[2.399s] writing dependency_links to src/carla_ros_bridge.egg-info/dependency_links.txt
+[2.399s] writing entry points to src/carla_ros_bridge.egg-info/entry_points.txt
+[2.400s] writing requirements to src/carla_ros_bridge.egg-info/requires.txt
+[2.400s] writing top-level names to src/carla_ros_bridge.egg-info/top_level.txt
+[2.400s] writing manifest file 'src/carla_ros_bridge.egg-info/SOURCES.txt'
+[2.403s] reading manifest file 'src/carla_ros_bridge.egg-info/SOURCES.txt'
+[2.405s] writing manifest file 'src/carla_ros_bridge.egg-info/SOURCES.txt'
+[2.407s] running build_ext
+[2.407s] Creating /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla-ros-bridge.egg-link (link to src)
+[2.408s] Installing bridge script to /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/carla_ros_bridge
+[2.410s] 
+[2.410s] Installed /home/nisanth/carla_ros_ws/build/carla_ros_bridge/src
+[2.410s] running symlink_data
+[2.410s] creating /home/nisanth/carla_ros_ws/install/carla_ros_bridge/share/ament_index
+[2.410s] creating /home/nisanth/carla_ros_ws/install/carla_ros_bridge/share/ament_index/resource_index
+[2.411s] creating /home/nisanth/carla_ros_ws/install/carla_ros_bridge/share/ament_index/resource_index/packages
+[2.411s] symbolically linking /home/nisanth/carla_ros_ws/build/carla_ros_bridge/resource/carla_ros_bridge -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/share/ament_index/resource_index/packages
+[2.412s] symbolically linking /home/nisanth/carla_ros_ws/build/carla_ros_bridge/package.xml -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/share/carla_ros_bridge
+[2.413s] symbolically linking /home/nisanth/carla_ros_ws/build/carla_ros_bridge/launch/carla_ros_bridge.launch.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/share/carla_ros_bridge
+[2.413s] symbolically linking /home/nisanth/carla_ros_ws/build/carla_ros_bridge/launch/carla_ros_bridge_with_example_ego_vehicle.launch.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/share/carla_ros_bridge
+[2.414s] creating /home/nisanth/carla_ros_ws/install/carla_ros_bridge/share/carla_ros_bridge/test
+[2.415s] symbolically linking /home/nisanth/carla_ros_ws/build/carla_ros_bridge/test/test_objects.json -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/share/carla_ros_bridge/test
+[2.477s] Invoked command in '/home/nisanth/carla_ros_ws/build/carla_ros_bridge' returned '0': AMENT_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/carla_spawn_objects:/home/nisanth/carla_ros_ws/install/carla_manual_control:/home/nisanth/carla_ros_ws/install/ros_compatibility:/home/nisanth/carla_ros_ws/install/carla_msgs:/home/nisanth/carla_ros_ws/install/carla_common:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs LD_LIBRARY_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs/lib:${LD_LIBRARY_PATH} PYTHONPATH=/home/nisanth/carla_ros_ws/build/carla_ros_bridge/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/build/carla_spawn_objects:/home/nisanth/carla_ros_ws/install/carla_spawn_objects/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/build/carla_manual_control/src:/home/nisanth/carla_ros_ws/install/carla_manual_control/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/build/ros_compatibility/src:/home/nisanth/carla_ros_ws/install/ros_compatibility/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/install/carla_msgs/local/lib/python3.10/dist-packages:/home/nisanth/carla_ros_ws/build/carla_common/src:/home/nisanth/carla_ros_ws/install/carla_common/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build --no-deps symlink_data

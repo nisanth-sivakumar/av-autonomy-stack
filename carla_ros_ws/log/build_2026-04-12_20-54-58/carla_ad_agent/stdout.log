@@ -1,0 +1,44 @@
+running egg_info
+creating ../../../build/carla_ad_agent/carla_ad_agent.egg-info
+writing ../../../build/carla_ad_agent/carla_ad_agent.egg-info/PKG-INFO
+writing dependency_links to ../../../build/carla_ad_agent/carla_ad_agent.egg-info/dependency_links.txt
+writing entry points to ../../../build/carla_ad_agent/carla_ad_agent.egg-info/entry_points.txt
+writing requirements to ../../../build/carla_ad_agent/carla_ad_agent.egg-info/requires.txt
+writing top-level names to ../../../build/carla_ad_agent/carla_ad_agent.egg-info/top_level.txt
+writing manifest file '../../../build/carla_ad_agent/carla_ad_agent.egg-info/SOURCES.txt'
+reading manifest file '../../../build/carla_ad_agent/carla_ad_agent.egg-info/SOURCES.txt'
+writing manifest file '../../../build/carla_ad_agent/carla_ad_agent.egg-info/SOURCES.txt'
+running build
+running build_py
+creating /home/nisanth/carla_ros_ws/build/carla_ad_agent/build
+creating /home/nisanth/carla_ros_ws/build/carla_ad_agent/build/lib
+creating /home/nisanth/carla_ros_ws/build/carla_ad_agent/build/lib/carla_ad_agent
+copying src/carla_ad_agent/misc.py -> /home/nisanth/carla_ros_ws/build/carla_ad_agent/build/lib/carla_ad_agent
+copying src/carla_ad_agent/vehicle_pid_controller.py -> /home/nisanth/carla_ros_ws/build/carla_ad_agent/build/lib/carla_ad_agent
+copying src/carla_ad_agent/local_planner.py -> /home/nisanth/carla_ros_ws/build/carla_ad_agent/build/lib/carla_ad_agent
+copying src/carla_ad_agent/agent.py -> /home/nisanth/carla_ros_ws/build/carla_ad_agent/build/lib/carla_ad_agent
+copying src/carla_ad_agent/ad_agent.py -> /home/nisanth/carla_ros_ws/build/carla_ad_agent/build/lib/carla_ad_agent
+copying src/carla_ad_agent/__init__.py -> /home/nisanth/carla_ros_ws/build/carla_ad_agent/build/lib/carla_ad_agent
+running install
+running install_lib
+creating /home/nisanth/carla_ros_ws/install/carla_ad_agent/lib/python3.10/site-packages/carla_ad_agent
+copying /home/nisanth/carla_ros_ws/build/carla_ad_agent/build/lib/carla_ad_agent/misc.py -> /home/nisanth/carla_ros_ws/install/carla_ad_agent/lib/python3.10/site-packages/carla_ad_agent
+copying /home/nisanth/carla_ros_ws/build/carla_ad_agent/build/lib/carla_ad_agent/vehicle_pid_controller.py -> /home/nisanth/carla_ros_ws/install/carla_ad_agent/lib/python3.10/site-packages/carla_ad_agent
+copying /home/nisanth/carla_ros_ws/build/carla_ad_agent/build/lib/carla_ad_agent/local_planner.py -> /home/nisanth/carla_ros_ws/install/carla_ad_agent/lib/python3.10/site-packages/carla_ad_agent
+copying /home/nisanth/carla_ros_ws/build/carla_ad_agent/build/lib/carla_ad_agent/agent.py -> /home/nisanth/carla_ros_ws/install/carla_ad_agent/lib/python3.10/site-packages/carla_ad_agent
+copying /home/nisanth/carla_ros_ws/build/carla_ad_agent/build/lib/carla_ad_agent/ad_agent.py -> /home/nisanth/carla_ros_ws/install/carla_ad_agent/lib/python3.10/site-packages/carla_ad_agent
+copying /home/nisanth/carla_ros_ws/build/carla_ad_agent/build/lib/carla_ad_agent/__init__.py -> /home/nisanth/carla_ros_ws/install/carla_ad_agent/lib/python3.10/site-packages/carla_ad_agent
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ad_agent/lib/python3.10/site-packages/carla_ad_agent/misc.py to misc.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ad_agent/lib/python3.10/site-packages/carla_ad_agent/vehicle_pid_controller.py to vehicle_pid_controller.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ad_agent/lib/python3.10/site-packages/carla_ad_agent/local_planner.py to local_planner.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ad_agent/lib/python3.10/site-packages/carla_ad_agent/agent.py to agent.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ad_agent/lib/python3.10/site-packages/carla_ad_agent/ad_agent.py to ad_agent.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ad_agent/lib/python3.10/site-packages/carla_ad_agent/__init__.py to __init__.cpython-310.pyc
+running install_data
+running install_egg_info
+Copying ../../../build/carla_ad_agent/carla_ad_agent.egg-info to /home/nisanth/carla_ros_ws/install/carla_ad_agent/lib/python3.10/site-packages/carla_ad_agent-0.0.0-py3.10.egg-info
+running install_scripts
+Installing ad_agent script to /home/nisanth/carla_ros_ws/install/carla_ad_agent/lib/carla_ad_agent
+Installing local_planner script to /home/nisanth/carla_ros_ws/install/carla_ad_agent/lib/carla_ad_agent
+Installing testing_waypoints script to /home/nisanth/carla_ros_ws/install/carla_ad_agent/lib/carla_ad_agent
+writing list of installed files to '/home/nisanth/carla_ros_ws/build/carla_ad_agent/install.log'

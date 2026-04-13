@@ -1,0 +1,1 @@
+/home/nisanth/carla_ros_ws/build/carla_waypoint_types/rosidl_generator_py/carla_waypoint_types/srv/_get_waypoint.py

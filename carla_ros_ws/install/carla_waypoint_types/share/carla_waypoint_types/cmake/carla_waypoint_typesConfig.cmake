@@ -1,0 +1,1 @@
+/home/nisanth/carla_ros_ws/build/carla_waypoint_types/ament_cmake_core/carla_waypoint_typesConfig.cmake

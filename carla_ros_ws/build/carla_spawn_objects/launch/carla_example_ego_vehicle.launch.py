@@ -1,0 +1,1 @@
+/home/nisanth/carla_ros_ws/src/ros-bridge/carla_spawn_objects/launch/carla_example_ego_vehicle.launch.py

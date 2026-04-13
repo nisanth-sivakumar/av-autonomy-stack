@@ -1,0 +1,1 @@
+/home/nisanth/carla_ros_ws/src/ros-bridge/rqt_carla_control/setup.py

@@ -1,0 +1,30 @@
+[2.101s] Invoking command in '/home/nisanth/carla_ros_ws/build/carla_spawn_objects': AMENT_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/ros_compatibility:/home/nisanth/carla_ros_ws/install/carla_msgs:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs LD_LIBRARY_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs/lib:${LD_LIBRARY_PATH} PYTHONPATH=/home/nisanth/carla_ros_ws/build/carla_spawn_objects/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/nisanth/carla_ros_ws/install/carla_spawn_objects/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/build/ros_compatibility/src:/home/nisanth/carla_ros_ws/install/ros_compatibility/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/install/carla_msgs/local/lib/python3.10/dist-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/nisanth/carla_ros_ws/build/carla_spawn_objects/build --no-deps symlink_data
+[2.468s] running develop
+[2.673s] running egg_info
+[2.673s] creating carla_spawn_objects.egg-info
+[2.674s] writing carla_spawn_objects.egg-info/PKG-INFO
+[2.675s] writing dependency_links to carla_spawn_objects.egg-info/dependency_links.txt
+[2.675s] writing entry points to carla_spawn_objects.egg-info/entry_points.txt
+[2.675s] writing requirements to carla_spawn_objects.egg-info/requires.txt
+[2.675s] writing top-level names to carla_spawn_objects.egg-info/top_level.txt
+[2.676s] writing manifest file 'carla_spawn_objects.egg-info/SOURCES.txt'
+[2.679s] reading manifest file 'carla_spawn_objects.egg-info/SOURCES.txt'
+[2.680s] writing manifest file 'carla_spawn_objects.egg-info/SOURCES.txt'
+[2.681s] running build_ext
+[2.682s] Creating /home/nisanth/carla_ros_ws/install/carla_spawn_objects/lib/python3.10/site-packages/carla-spawn-objects.egg-link (link to .)
+[2.684s] Installing carla_spawn_objects script to /home/nisanth/carla_ros_ws/install/carla_spawn_objects/lib/carla_spawn_objects
+[2.685s] Installing set_initial_pose script to /home/nisanth/carla_ros_ws/install/carla_spawn_objects/lib/carla_spawn_objects
+[2.686s] 
+[2.686s] Installed /home/nisanth/carla_ros_ws/build/carla_spawn_objects
+[2.686s] running symlink_data
+[2.686s] creating /home/nisanth/carla_ros_ws/install/carla_spawn_objects/share/ament_index
+[2.687s] creating /home/nisanth/carla_ros_ws/install/carla_spawn_objects/share/ament_index/resource_index
+[2.688s] creating /home/nisanth/carla_ros_ws/install/carla_spawn_objects/share/ament_index/resource_index/packages
+[2.688s] symbolically linking /home/nisanth/carla_ros_ws/build/carla_spawn_objects/resource/carla_spawn_objects -> /home/nisanth/carla_ros_ws/install/carla_spawn_objects/share/ament_index/resource_index/packages
+[2.689s] symbolically linking /home/nisanth/carla_ros_ws/build/carla_spawn_objects/package.xml -> /home/nisanth/carla_ros_ws/install/carla_spawn_objects/share/carla_spawn_objects
+[2.689s] creating /home/nisanth/carla_ros_ws/install/carla_spawn_objects/share/carla_spawn_objects/config
+[2.690s] symbolically linking /home/nisanth/carla_ros_ws/build/carla_spawn_objects/config/objects.json -> /home/nisanth/carla_ros_ws/install/carla_spawn_objects/share/carla_spawn_objects/config
+[2.691s] symbolically linking /home/nisanth/carla_ros_ws/build/carla_spawn_objects/launch/set_initial_pose.launch.py -> /home/nisanth/carla_ros_ws/install/carla_spawn_objects/share/carla_spawn_objects
+[2.692s] symbolically linking /home/nisanth/carla_ros_ws/build/carla_spawn_objects/launch/carla_example_ego_vehicle.launch.py -> /home/nisanth/carla_ros_ws/install/carla_spawn_objects/share/carla_spawn_objects
+[2.692s] symbolically linking /home/nisanth/carla_ros_ws/build/carla_spawn_objects/launch/carla_spawn_objects.launch.py -> /home/nisanth/carla_ros_ws/install/carla_spawn_objects/share/carla_spawn_objects
+[2.778s] Invoked command in '/home/nisanth/carla_ros_ws/build/carla_spawn_objects' returned '0': AMENT_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/ros_compatibility:/home/nisanth/carla_ros_ws/install/carla_msgs:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs LD_LIBRARY_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs/lib:${LD_LIBRARY_PATH} PYTHONPATH=/home/nisanth/carla_ros_ws/build/carla_spawn_objects/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/nisanth/carla_ros_ws/install/carla_spawn_objects/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/build/ros_compatibility/src:/home/nisanth/carla_ros_ws/install/ros_compatibility/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/install/carla_msgs/local/lib/python3.10/dist-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/nisanth/carla_ros_ws/build/carla_spawn_objects/build --no-deps symlink_data

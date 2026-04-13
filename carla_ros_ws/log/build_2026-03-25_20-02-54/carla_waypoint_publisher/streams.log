@@ -1,0 +1,25 @@
+[3.060s] Invoking command in '/home/nisanth/carla_ros_ws/build/carla_waypoint_publisher': AMENT_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/ros_compatibility:/home/nisanth/carla_ros_ws/install/carla_waypoint_types:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/carla_waypoint_types LD_LIBRARY_PATH=/home/nisanth/carla_ros_ws/install/carla_waypoint_types/lib:${LD_LIBRARY_PATH} PYTHONPATH=/home/nisanth/carla_ros_ws/build/carla_waypoint_publisher/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/nisanth/carla_ros_ws/install/carla_waypoint_publisher/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/build/ros_compatibility/src:/home/nisanth/carla_ros_ws/install/ros_compatibility/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/install/carla_waypoint_types/local/lib/python3.10/dist-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/nisanth/carla_ros_ws/build/carla_waypoint_publisher/build --no-deps symlink_data
+[3.304s] running develop
+[3.446s] running egg_info
+[3.446s] creating src/carla_waypoint_publisher.egg-info
+[3.448s] writing src/carla_waypoint_publisher.egg-info/PKG-INFO
+[3.448s] writing dependency_links to src/carla_waypoint_publisher.egg-info/dependency_links.txt
+[3.448s] writing entry points to src/carla_waypoint_publisher.egg-info/entry_points.txt
+[3.448s] writing requirements to src/carla_waypoint_publisher.egg-info/requires.txt
+[3.448s] writing top-level names to src/carla_waypoint_publisher.egg-info/top_level.txt
+[3.448s] writing manifest file 'src/carla_waypoint_publisher.egg-info/SOURCES.txt'
+[3.453s] reading manifest file 'src/carla_waypoint_publisher.egg-info/SOURCES.txt'
+[3.453s] writing manifest file 'src/carla_waypoint_publisher.egg-info/SOURCES.txt'
+[3.454s] running build_ext
+[3.455s] Creating /home/nisanth/carla_ros_ws/install/carla_waypoint_publisher/lib/python3.10/site-packages/carla-waypoint-publisher.egg-link (link to src)
+[3.455s] Installing carla_waypoint_publisher script to /home/nisanth/carla_ros_ws/install/carla_waypoint_publisher/lib/carla_waypoint_publisher
+[3.456s] 
+[3.457s] Installed /home/nisanth/carla_ros_ws/build/carla_waypoint_publisher/src
+[3.457s] running symlink_data
+[3.457s] creating /home/nisanth/carla_ros_ws/install/carla_waypoint_publisher/share/ament_index
+[3.457s] creating /home/nisanth/carla_ros_ws/install/carla_waypoint_publisher/share/ament_index/resource_index
+[3.458s] creating /home/nisanth/carla_ros_ws/install/carla_waypoint_publisher/share/ament_index/resource_index/packages
+[3.458s] symbolically linking /home/nisanth/carla_ros_ws/build/carla_waypoint_publisher/resource/carla_waypoint_publisher -> /home/nisanth/carla_ros_ws/install/carla_waypoint_publisher/share/ament_index/resource_index/packages
+[3.459s] symbolically linking /home/nisanth/carla_ros_ws/build/carla_waypoint_publisher/package.xml -> /home/nisanth/carla_ros_ws/install/carla_waypoint_publisher/share/carla_waypoint_publisher
+[3.459s] symbolically linking /home/nisanth/carla_ros_ws/build/carla_waypoint_publisher/launch/carla_waypoint_publisher.launch.py -> /home/nisanth/carla_ros_ws/install/carla_waypoint_publisher/share/carla_waypoint_publisher
+[3.497s] Invoked command in '/home/nisanth/carla_ros_ws/build/carla_waypoint_publisher' returned '0': AMENT_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/ros_compatibility:/home/nisanth/carla_ros_ws/install/carla_waypoint_types:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/carla_waypoint_types LD_LIBRARY_PATH=/home/nisanth/carla_ros_ws/install/carla_waypoint_types/lib:${LD_LIBRARY_PATH} PYTHONPATH=/home/nisanth/carla_ros_ws/build/carla_waypoint_publisher/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/nisanth/carla_ros_ws/install/carla_waypoint_publisher/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/build/ros_compatibility/src:/home/nisanth/carla_ros_ws/install/ros_compatibility/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/install/carla_waypoint_types/local/lib/python3.10/dist-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/nisanth/carla_ros_ws/build/carla_waypoint_publisher/build --no-deps symlink_data

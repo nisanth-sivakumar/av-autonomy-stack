@@ -1,0 +1,25 @@
+[2.113s] Invoking command in '/home/nisanth/carla_ros_ws/build/carla_manual_control': AMENT_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/ros_compatibility:/home/nisanth/carla_ros_ws/install/carla_msgs:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs LD_LIBRARY_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs/lib:${LD_LIBRARY_PATH} PYTHONPATH=/home/nisanth/carla_ros_ws/build/carla_manual_control/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/nisanth/carla_ros_ws/install/carla_manual_control/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/build/ros_compatibility/src:/home/nisanth/carla_ros_ws/install/ros_compatibility/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/install/carla_msgs/local/lib/python3.10/dist-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/nisanth/carla_ros_ws/build/carla_manual_control/build --no-deps symlink_data
+[2.480s] running develop
+[2.695s] running egg_info
+[2.695s] creating src/carla_manual_control.egg-info
+[2.696s] writing src/carla_manual_control.egg-info/PKG-INFO
+[2.697s] writing dependency_links to src/carla_manual_control.egg-info/dependency_links.txt
+[2.698s] writing entry points to src/carla_manual_control.egg-info/entry_points.txt
+[2.698s] writing requirements to src/carla_manual_control.egg-info/requires.txt
+[2.698s] writing top-level names to src/carla_manual_control.egg-info/top_level.txt
+[2.698s] writing manifest file 'src/carla_manual_control.egg-info/SOURCES.txt'
+[2.701s] reading manifest file 'src/carla_manual_control.egg-info/SOURCES.txt'
+[2.702s] writing manifest file 'src/carla_manual_control.egg-info/SOURCES.txt'
+[2.704s] running build_ext
+[2.704s] Creating /home/nisanth/carla_ros_ws/install/carla_manual_control/lib/python3.10/site-packages/carla-manual-control.egg-link (link to src)
+[2.706s] Installing carla_manual_control script to /home/nisanth/carla_ros_ws/install/carla_manual_control/lib/carla_manual_control
+[2.707s] 
+[2.707s] Installed /home/nisanth/carla_ros_ws/build/carla_manual_control/src
+[2.707s] running symlink_data
+[2.707s] creating /home/nisanth/carla_ros_ws/install/carla_manual_control/share/ament_index
+[2.707s] creating /home/nisanth/carla_ros_ws/install/carla_manual_control/share/ament_index/resource_index
+[2.708s] creating /home/nisanth/carla_ros_ws/install/carla_manual_control/share/ament_index/resource_index/packages
+[2.708s] symbolically linking /home/nisanth/carla_ros_ws/build/carla_manual_control/resource/carla_manual_control -> /home/nisanth/carla_ros_ws/install/carla_manual_control/share/ament_index/resource_index/packages
+[2.709s] symbolically linking /home/nisanth/carla_ros_ws/build/carla_manual_control/package.xml -> /home/nisanth/carla_ros_ws/install/carla_manual_control/share/carla_manual_control
+[2.709s] symbolically linking /home/nisanth/carla_ros_ws/build/carla_manual_control/launch/carla_manual_control.launch.py -> /home/nisanth/carla_ros_ws/install/carla_manual_control/share/carla_manual_control
+[2.800s] Invoked command in '/home/nisanth/carla_ros_ws/build/carla_manual_control' returned '0': AMENT_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/ros_compatibility:/home/nisanth/carla_ros_ws/install/carla_msgs:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs LD_LIBRARY_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs/lib:${LD_LIBRARY_PATH} PYTHONPATH=/home/nisanth/carla_ros_ws/build/carla_manual_control/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/nisanth/carla_ros_ws/install/carla_manual_control/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/build/ros_compatibility/src:/home/nisanth/carla_ros_ws/install/ros_compatibility/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/install/carla_msgs/local/lib/python3.10/dist-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/nisanth/carla_ros_ws/build/carla_manual_control/build --no-deps symlink_data

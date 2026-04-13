@@ -1,0 +1,122 @@
+running egg_info
+creating ../../../build/carla_ros_bridge/carla_ros_bridge.egg-info
+writing ../../../build/carla_ros_bridge/carla_ros_bridge.egg-info/PKG-INFO
+writing dependency_links to ../../../build/carla_ros_bridge/carla_ros_bridge.egg-info/dependency_links.txt
+writing entry points to ../../../build/carla_ros_bridge/carla_ros_bridge.egg-info/entry_points.txt
+writing requirements to ../../../build/carla_ros_bridge/carla_ros_bridge.egg-info/requires.txt
+writing top-level names to ../../../build/carla_ros_bridge/carla_ros_bridge.egg-info/top_level.txt
+writing manifest file '../../../build/carla_ros_bridge/carla_ros_bridge.egg-info/SOURCES.txt'
+reading manifest file '../../../build/carla_ros_bridge/carla_ros_bridge.egg-info/SOURCES.txt'
+writing manifest file '../../../build/carla_ros_bridge/carla_ros_bridge.egg-info/SOURCES.txt'
+running build
+running build_py
+creating /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build
+creating /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib
+creating /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/odom_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/ego_vehicle.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/debug_helper.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/opendrive_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/carla_status_publisher.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/actor_factory.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/gnss.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/lane_invasion_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/speedometer_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/radar.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/actor_control.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/actor_list_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/marker_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/traffic_participant.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/spectator.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/collision_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/camera.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/lidar.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/walker.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/object_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/tf_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/bridge.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/vehicle.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/world_info.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/__init__.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/traffic.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/traffic_lights_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/rss_sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/pseudo_actor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/imu.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/sensor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/actor.py -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+copying src/carla_ros_bridge/CARLA_VERSION -> /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge
+running install
+running install_lib
+creating /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/odom_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/ego_vehicle.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/debug_helper.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/opendrive_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/carla_status_publisher.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/CARLA_VERSION -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/actor_factory.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/gnss.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/lane_invasion_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/speedometer_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/radar.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/actor_control.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/actor_list_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/marker_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/traffic_participant.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/spectator.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/collision_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/camera.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/lidar.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/walker.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/object_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/tf_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/bridge.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/vehicle.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/world_info.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/__init__.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/traffic.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/traffic_lights_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/rss_sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/pseudo_actor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/imu.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/sensor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+copying /home/nisanth/carla_ros_ws/build/carla_ros_bridge/build/lib/carla_ros_bridge/actor.py -> /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/odom_sensor.py to odom_sensor.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/ego_vehicle.py to ego_vehicle.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/debug_helper.py to debug_helper.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/opendrive_sensor.py to opendrive_sensor.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/carla_status_publisher.py to carla_status_publisher.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/actor_factory.py to actor_factory.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/gnss.py to gnss.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/lane_invasion_sensor.py to lane_invasion_sensor.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/speedometer_sensor.py to speedometer_sensor.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/radar.py to radar.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/actor_control.py to actor_control.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/actor_list_sensor.py to actor_list_sensor.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/marker_sensor.py to marker_sensor.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/traffic_participant.py to traffic_participant.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/spectator.py to spectator.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/collision_sensor.py to collision_sensor.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/camera.py to camera.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/lidar.py to lidar.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/walker.py to walker.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/object_sensor.py to object_sensor.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/tf_sensor.py to tf_sensor.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/bridge.py to bridge.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/vehicle.py to vehicle.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/world_info.py to world_info.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/__init__.py to __init__.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/traffic.py to traffic.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/traffic_lights_sensor.py to traffic_lights_sensor.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/rss_sensor.py to rss_sensor.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/pseudo_actor.py to pseudo_actor.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/imu.py to imu.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/sensor.py to sensor.cpython-310.pyc
+byte-compiling /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge/actor.py to actor.cpython-310.pyc
+running install_data
+running install_egg_info
+Copying ../../../build/carla_ros_bridge/carla_ros_bridge.egg-info to /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/python3.10/site-packages/carla_ros_bridge-0.0.0-py3.10.egg-info
+running install_scripts
+Installing bridge script to /home/nisanth/carla_ros_ws/install/carla_ros_bridge/lib/carla_ros_bridge
+writing list of installed files to '/home/nisanth/carla_ros_ws/build/carla_ros_bridge/install.log'

@@ -1,0 +1,32 @@
+[1.747s] Invoking command in '/home/nisanth/carla_ros_ws/src/ros-bridge/carla_walker_agent': AMENT_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs LD_LIBRARY_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs/lib:${LD_LIBRARY_PATH} PYTHONPATH=/home/nisanth/carla_ros_ws/build/carla_walker_agent/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/nisanth/carla_ros_ws/install/carla_walker_agent/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/install/carla_msgs/local/lib/python3.10/dist-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../../build/carla_walker_agent build --build-base /home/nisanth/carla_ros_ws/build/carla_walker_agent/build install --record /home/nisanth/carla_ros_ws/build/carla_walker_agent/install.log --single-version-externally-managed install_data
+[2.022s] running egg_info
+[2.023s] creating ../../../build/carla_walker_agent/carla_walker_agent.egg-info
+[2.024s] writing ../../../build/carla_walker_agent/carla_walker_agent.egg-info/PKG-INFO
+[2.024s] writing dependency_links to ../../../build/carla_walker_agent/carla_walker_agent.egg-info/dependency_links.txt
+[2.025s] writing entry points to ../../../build/carla_walker_agent/carla_walker_agent.egg-info/entry_points.txt
+[2.025s] writing requirements to ../../../build/carla_walker_agent/carla_walker_agent.egg-info/requires.txt
+[2.025s] writing top-level names to ../../../build/carla_walker_agent/carla_walker_agent.egg-info/top_level.txt
+[2.025s] writing manifest file '../../../build/carla_walker_agent/carla_walker_agent.egg-info/SOURCES.txt'
+[2.026s] reading manifest file '../../../build/carla_walker_agent/carla_walker_agent.egg-info/SOURCES.txt'
+[2.027s] writing manifest file '../../../build/carla_walker_agent/carla_walker_agent.egg-info/SOURCES.txt'
+[2.027s] running build
+[2.027s] running build_py
+[2.028s] creating /home/nisanth/carla_ros_ws/build/carla_walker_agent/build
+[2.028s] creating /home/nisanth/carla_ros_ws/build/carla_walker_agent/build/lib
+[2.028s] creating /home/nisanth/carla_ros_ws/build/carla_walker_agent/build/lib/carla_walker_agent
+[2.029s] copying src/carla_walker_agent/carla_walker_agent.py -> /home/nisanth/carla_ros_ws/build/carla_walker_agent/build/lib/carla_walker_agent
+[2.029s] copying src/carla_walker_agent/__init__.py -> /home/nisanth/carla_ros_ws/build/carla_walker_agent/build/lib/carla_walker_agent
+[2.030s] running install
+[2.030s] running install_lib
+[2.031s] creating /home/nisanth/carla_ros_ws/install/carla_walker_agent/lib/python3.10/site-packages/carla_walker_agent
+[2.031s] copying /home/nisanth/carla_ros_ws/build/carla_walker_agent/build/lib/carla_walker_agent/carla_walker_agent.py -> /home/nisanth/carla_ros_ws/install/carla_walker_agent/lib/python3.10/site-packages/carla_walker_agent
+[2.032s] copying /home/nisanth/carla_ros_ws/build/carla_walker_agent/build/lib/carla_walker_agent/__init__.py -> /home/nisanth/carla_ros_ws/install/carla_walker_agent/lib/python3.10/site-packages/carla_walker_agent
+[2.033s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_walker_agent/lib/python3.10/site-packages/carla_walker_agent/carla_walker_agent.py to carla_walker_agent.cpython-310.pyc
+[2.034s] byte-compiling /home/nisanth/carla_ros_ws/install/carla_walker_agent/lib/python3.10/site-packages/carla_walker_agent/__init__.py to __init__.cpython-310.pyc
+[2.035s] running install_data
+[2.036s] running install_egg_info
+[2.040s] Copying ../../../build/carla_walker_agent/carla_walker_agent.egg-info to /home/nisanth/carla_ros_ws/install/carla_walker_agent/lib/python3.10/site-packages/carla_walker_agent-0.0.0-py3.10.egg-info
+[2.040s] running install_scripts
+[2.062s] Installing carla_walker_agent script to /home/nisanth/carla_ros_ws/install/carla_walker_agent/lib/carla_walker_agent
+[2.062s] writing list of installed files to '/home/nisanth/carla_ros_ws/build/carla_walker_agent/install.log'
+[2.109s] Invoked command in '/home/nisanth/carla_ros_ws/src/ros-bridge/carla_walker_agent' returned '0': AMENT_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs LD_LIBRARY_PATH=/home/nisanth/carla_ros_ws/install/carla_msgs/lib:${LD_LIBRARY_PATH} PYTHONPATH=/home/nisanth/carla_ros_ws/build/carla_walker_agent/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/nisanth/carla_ros_ws/install/carla_walker_agent/lib/python3.10/site-packages:/home/nisanth/carla_ros_ws/install/carla_msgs/local/lib/python3.10/dist-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../../build/carla_walker_agent build --build-base /home/nisanth/carla_ros_ws/build/carla_walker_agent/build install --record /home/nisanth/carla_ros_ws/build/carla_walker_agent/install.log --single-version-externally-managed install_data

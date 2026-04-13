@@ -1,0 +1,1 @@
+/home/nisanth/carla_ros_ws/src/ros-bridge/carla_waypoint_publisher/launch/carla_waypoint_publisher.launch.py
