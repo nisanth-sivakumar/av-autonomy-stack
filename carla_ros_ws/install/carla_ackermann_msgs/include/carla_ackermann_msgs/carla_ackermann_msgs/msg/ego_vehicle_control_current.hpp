@@ -1,1 +1,0 @@
-/home/nisanth/carla_ros_ws/build/carla_ackermann_msgs/rosidl_generator_cpp/carla_ackermann_msgs/msg/ego_vehicle_control_current.hpp

@@ -1,1 +1,0 @@
-/home/nisanth/carla_ros_ws/build/carla_waypoint_types/rosidl_generator_py/carla_waypoint_types/_carla_waypoint_types_s.ep.rosidl_typesupport_introspection_c.c

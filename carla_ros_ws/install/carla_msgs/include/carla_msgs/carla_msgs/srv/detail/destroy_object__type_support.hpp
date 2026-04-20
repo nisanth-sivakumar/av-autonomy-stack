@@ -1,1 +1,0 @@
-/home/nisanth/carla_ros_ws/build/carla_msgs/rosidl_generator_cpp/carla_msgs/srv/detail/destroy_object__type_support.hpp

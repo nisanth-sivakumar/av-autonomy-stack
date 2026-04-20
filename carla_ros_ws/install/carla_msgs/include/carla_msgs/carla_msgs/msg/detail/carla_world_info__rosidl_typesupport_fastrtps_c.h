@@ -1,1 +1,0 @@
-/home/nisanth/carla_ros_ws/build/carla_msgs/rosidl_typesupport_fastrtps_c/carla_msgs/msg/detail/carla_world_info__rosidl_typesupport_fastrtps_c.h

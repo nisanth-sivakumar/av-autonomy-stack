@@ -1,1 +1,0 @@
-/home/nisanth/carla_ros_ws/install/rviz_carla_plugin/lib/librviz_carla_plugin.so

@@ -1,1 +1,0 @@
-/home/nisanth/carla_ros_ws/build/carla_msgs/rosidl_generator_c/carla_msgs/msg/detail/carla_status__struct.h

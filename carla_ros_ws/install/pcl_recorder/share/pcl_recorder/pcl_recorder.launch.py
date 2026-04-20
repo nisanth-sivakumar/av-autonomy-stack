@@ -1,1 +1,0 @@
-/home/nisanth/carla_ros_ws/src/ros-bridge/pcl_recorder/launch/pcl_recorder.launch.py

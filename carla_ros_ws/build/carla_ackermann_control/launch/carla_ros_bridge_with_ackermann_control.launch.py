@@ -1,1 +1,0 @@
-/home/nisanth/carla_ros_ws/src/ros-bridge/carla_ackermann_control/launch/carla_ros_bridge_with_ackermann_control.launch.py
