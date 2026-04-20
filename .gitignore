@@ -1,6 +1,6 @@
-ros_ws/build/
-ros_ws/install/
-ros_ws/log/
+carla_ros_ws/build/
+carla_ros_ws/install/
+carla_ros_ws/log/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/

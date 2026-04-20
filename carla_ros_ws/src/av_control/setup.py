@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'av_controller'
+package_name = 'av_control'
 
 setup(
     name=package_name,
@@ -24,6 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'controller_node = av_control.controller_node:main',
         ],
     },
 )
