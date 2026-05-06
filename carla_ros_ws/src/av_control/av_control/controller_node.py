@@ -146,7 +146,7 @@ class PurePursuitController(Node):
     # ------------------------------------------------------------------
     # Waypoint generation from CARLA map
     # ------------------------------------------------------------------
-    def _generate_road_waypoints(self, ros_x: float, ros_y: float):
+    def _generate_road_waypoints(self, ros_x: float, ros_y: float, yaw: float):
         """
         Walk the CARLA road graph forward from the vehicle's position
         and return a list of (ros_x, ros_y) pairs that follow the road.
@@ -171,6 +171,17 @@ class PurePursuitController(Node):
                 project_to_road=True,
                 lane_type=carla.LaneType.Driving
             )
+
+            # Check if the waypoint lane direction matches the car's heading.
+            # If the road yaw differs by more than 90 degrees, flip to the opposite lane.
+            wp_yaw_rad   = math.radians(start_wp.transform.rotation.yaw)
+            # Convert car yaw from ROS to CARLA (negate)
+            car_yaw_carla = -yaw  # yaw is the ROS yaw passed into this function
+            angle_diff = abs(math.atan2(math.sin(wp_yaw_rad - car_yaw_carla),
+                                        math.cos(wp_yaw_rad - car_yaw_carla)))
+            if angle_diff > math.pi / 2:
+                # We're on the oncoming lane — get the lane to the right instead
+                start_wp = start_wp.get_left_lane() or start_wp
         except Exception as e:
             self.get_logger().error(f"get_waypoint failed: {e}")
             return self._straight_line_fallback(ros_x, ros_y)
@@ -190,6 +201,32 @@ class PurePursuitController(Node):
             carla_y = current.transform.location.y
             # Apply ROS frame conversion
             waypoints.append((carla_x, -carla_y))
+
+        # --- validate: first waypoint must be ahead of the car ---
+        if waypoints:
+            dx = waypoints[0][0] - ros_x
+            dy = waypoints[0][1] - ros_y
+            forward_x = math.cos(yaw)
+            forward_y = math.sin(yaw)
+            dot = dx * forward_x + dy * forward_y
+            if dot < 0:
+                self.get_logger().warn(
+                    f'Waypoint set rejected — first WP is behind the car '
+                    f'(dot={dot:.2f}). Trying other lane.'
+                )
+                # Flip lane and try again
+                other = start_wp.get_left_lane() or start_wp.get_right_lane()
+                if other:
+                    start_wp = other
+                    waypoints = []
+                    wp = start_wp
+                    for _ in range(self._wp_lookahead_count):
+                        loc = wp.transform.location
+                        waypoints.append((loc.x, -loc.y))
+                        nexts = wp.next(self._wp_step_m)
+                        if not nexts:
+                            break
+                        wp = nexts[0]
 
         self.get_logger().info(
             f"Generated {len(waypoints)} road waypoints  "
@@ -213,7 +250,7 @@ class PurePursuitController(Node):
     # Initialisation
     # ------------------------------------------------------------------
     def _init_waypoints(self, px: float, py: float, yaw: float):
-        self._waypoints   = self._generate_road_waypoints(px, py)
+        self._waypoints = self._generate_road_waypoints(px, py, yaw)
         self._initialised = True
         self._slow_since  = None
         self._is_stuck    = False
@@ -248,10 +285,14 @@ class PurePursuitController(Node):
     # Main control callback
     # ------------------------------------------------------------------
     def _odom_callback(self, msg: Odometry):
-        px    = msg.pose.pose.position.x
-        py    = msg.pose.pose.position.y
-        yaw   = quaternion_to_yaw(msg.pose.pose.orientation)
+        px  = msg.pose.pose.position.x
+        py  = msg.pose.pose.position.y
+        yaw = quaternion_to_yaw(msg.pose.pose.orientation)
         speed = math.hypot(msg.twist.twist.linear.x, msg.twist.twist.linear.y)
+
+        # Skip if position hasn't initialised yet (CARLA sends 0,0 briefly on startup)
+        if not self._initialised and abs(px) < 0.1 and abs(py) < 0.1:
+            return
 
         if not self._initialised:
             self._init_waypoints(px, py, yaw)
