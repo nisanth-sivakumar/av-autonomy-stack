@@ -1,56 +1,53 @@
 #!/usr/bin/env python3
 """
-Pure Pursuit Controller Node — av_control package
-====================================================
-Subscribes : /carla/ego_vehicle/odometry  (nav_msgs/Odometry)
+Pure Pursuit Controller Node — av_control package  (Phase 2 — planner-aware)
+==============================================================================
+Subscribes : /carla/ego_vehicle/odometry       (nav_msgs/Odometry)
+             /planning/trajectory              (nav_msgs/Path)
 Publishes  : /carla/ego_vehicle/vehicle_control_cmd  (carla_msgs/CarlaEgoVehicleControl)
 
-Changelog v5 — CARLA map waypoints + stuck detection
-------------------------------------------------------
-PROBLEM: Relative/hardcoded waypoints go straight through walls and fences.
-FIX:     Use CARLA Python API to generate waypoints that follow actual roads.
-         The car will never be sent off-road again.
+Phase 2 changes
+---------------
+The controller no longer connects to the CARLA Python API or generates
+waypoints.  That responsibility now belongs entirely to planner_node.py.
 
-PROBLEM: When car hits an obstacle, throttle=1.0 forever.
-FIX:     Stuck detector: if speed < threshold for > stuck_timeout seconds,
-         apply brakes and log a warning.
+                ┌──────────────┐  /planning/trajectory  ┌────────────────┐
+  CARLA map ──▶ │ planner_node │ ─────────────────────▶ │ controller_node│
+                └──────────────┘                        └────────────────┘
 
-Coordinate frame note
----------------------
-CARLA uses a LEFT-handed frame (Y points right).
-carla_ros_bridge converts odometry to ROS frame (Y points left) by negating Y:
-    ros_x = carla_x
-    ros_y = -carla_y
+The controller simply converts the incoming nav_msgs/Path into its internal
+waypoint list and runs Pure Pursuit as before.
 
-So when we read waypoints from the CARLA Python API we must apply the same:
-    wp_ros_x = wp.transform.location.x
-    wp_ros_y = -wp.transform.location.y
+Coordinate conventions
+----------------------
+    ros_x  =  carla_x
+    ros_y  = -carla_y
+    ros_yaw = -carla_yaw
 
-Setup
------
-Make sure the CARLA Python API egg is on your PYTHONPATH, e.g. in ~/.bashrc:
-    export PYTHONPATH=$PYTHONPATH:~/CARLA_0.9.15/PythonAPI/carla/dist/carla-0.9.15-py3.10-linux-x86_64.egg
-
-Or find the exact egg name with:
-    ls ~/CARLA_0.9.15/PythonAPI/carla/dist/
+CARLA sign convention for steering
+-----------------------------------
+    positive steer = RIGHT turn
+    When local_y > 0 (target is to the LEFT), we want LEFT = negative steer
+    → note the negation in the steer calculation below.
 """
 
 import math
 import time
 import rclpy
 from rclpy.node import Node
-from nav_msgs.msg import Odometry
+from rclpy.qos import (
+    QoSProfile,
+    QoSReliabilityPolicy,
+    QoSDurabilityPolicy,
+    QoSHistoryPolicy,
+)
+from nav_msgs.msg import Odometry, Path
 from carla_msgs.msg import CarlaEgoVehicleControl
 
-# ---------------------------------------------------------------------------
-# CARLA Python API import — graceful fallback if not on PYTHONPATH
-# ---------------------------------------------------------------------------
-try:
-    import carla
-    CARLA_AVAILABLE = True
-except ImportError:
-    CARLA_AVAILABLE = False
 
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
 
 def quaternion_to_yaw(q) -> float:
     siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
@@ -58,210 +55,248 @@ def quaternion_to_yaw(q) -> float:
     return math.atan2(siny_cosp, cosy_cosp)
 
 
+# ---------------------------------------------------------------------------
+# Controller node
+# ---------------------------------------------------------------------------
+
 class PurePursuitController(Node):
 
     def __init__(self):
         super().__init__("pure_pursuit_controller")
 
-        # ---- ROS parameters ------------------------------------------------
-        self.declare_parameter("carla_host",          "localhost")
-        self.declare_parameter("carla_port",          2000)
-        self.declare_parameter("carla_timeout",       10.0)
-        self.declare_parameter("wp_step_m",           3.0)   # distance between road waypoints
-        self.declare_parameter("wp_lookahead_count",  80)    # how many road WPs to generate ahead
+        # ── Parameters ────────────────────────────────────────────────────
         self.declare_parameter("lookahead_distance",  6.0)
         self.declare_parameter("target_speed",        3.0)
         self.declare_parameter("kp_speed",            0.5)
         self.declare_parameter("steering_gain",       1.0)
         self.declare_parameter("max_steer",           0.6)
+        self.declare_parameter("wheelbase",           2.875)   # Tesla Model 3
         self.declare_parameter("debug_interval",      10)
-        self.declare_parameter("wheelbase",           2.875)
-        self.declare_parameter("stuck_speed_thresh",  0.2)   # m/s — below this = potentially stuck
-        self.declare_parameter("stuck_timeout",       3.0)   # seconds below threshold before "stuck"
-
-        # ---- State ---------------------------------------------------------
-        self._waypoints     = []
-        self._initialised   = False
-        self._tick          = 0
-        self._laps          = 0
-        self._carla_map     = None
 
         # Stuck detection
-        self._slow_since    = None   # timestamp when speed first dropped below threshold
-        self._is_stuck      = False
+        self.declare_parameter("stuck_speed_thresh",  0.2)   # m/s
+        self.declare_parameter("stuck_timeout",       3.0)   # seconds
 
-        # ---- CARLA connection ----------------------------------------------
-        self._connect_to_carla()
+        # No-trajectory guard: brake if the planner has been silent this long
+        self.declare_parameter("trajectory_timeout",  2.0)   # seconds
 
-        # ---- ROS pub/sub ---------------------------------------------------
-        self.cmd_pub = self.create_publisher(
+        # ── State ─────────────────────────────────────────────────────────
+        self._waypoints: list[tuple[float, float]] = []
+        self._tick = 0
+
+        self._slow_since:  float | None = None
+        self._is_stuck:    bool         = False
+
+        self._last_trajectory_stamp: float | None = None
+
+        # ── QoS: match planner's latched publisher ─────────────────────────
+        latched_qos = QoSProfile(
+            depth=1,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            history=QoSHistoryPolicy.KEEP_LAST,
+        )
+
+        odom_qos = QoSProfile(
+            depth=10,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.VOLATILE,
+        )
+
+        # ── ROS pub/sub ───────────────────────────────────────────────────
+        self._cmd_pub = self.create_publisher(
             CarlaEgoVehicleControl,
             "/carla/ego_vehicle/vehicle_control_cmd",
             10,
         )
-        self.odom_sub = self.create_subscription(
+        self.create_subscription(
             Odometry,
             "/carla/ego_vehicle/odometry",
-            self._odom_callback,
-            10,
+            self._odom_cb,
+            odom_qos,
         )
-
-        self.get_logger().info("PurePursuitController ready — waiting for first odometry…")
-
-    # ------------------------------------------------------------------
-    # CARLA connection
-    # ------------------------------------------------------------------
-    def _connect_to_carla(self):
-        if not CARLA_AVAILABLE:
-            self.get_logger().error(
-                "CARLA Python API not found on PYTHONPATH.\n"
-                "  Add the egg to ~/.bashrc:\n"
-                "  export PYTHONPATH=$PYTHONPATH:~/CARLA_0.9.15/PythonAPI/carla/dist/"
-                "<carla_egg_name>.egg\n"
-                "  Then rebuild: colcon build --packages-select av_control\n"
-                "  Falling back to no map waypoints — car will drive straight."
-            )
-            return
-
-        host    = self.get_parameter("carla_host").value
-        port    = self.get_parameter("carla_port").value
-        timeout = self.get_parameter("carla_timeout").value
-
-        try:
-            self.get_logger().info(f"Connecting to CARLA at {host}:{port}…")
-            client = carla.Client(host, port)
-            client.set_timeout(timeout)
-            world  = client.get_world()
-            self._carla_map = world.get_map()
-            self.get_logger().info(
-                f"Connected to CARLA  map={self._carla_map.name}"
-            )
-        except Exception as e:
-            self.get_logger().error(
-                f"Failed to connect to CARLA: {e}\n"
-                "  Is CARLA running? Is the port correct?\n"
-                "  Falling back to no map waypoints."
-            )
-
-    # ------------------------------------------------------------------
-    # Waypoint generation from CARLA map
-    # ------------------------------------------------------------------
-    def _generate_road_waypoints(self, ros_x: float, ros_y: float, yaw: float):
-        """
-        Walk the CARLA road graph forward from the vehicle's position
-        and return a list of (ros_x, ros_y) pairs that follow the road.
-
-        Coordinate conversion: CARLA Y is negated to get ROS Y.
-        """
-        if self._carla_map is None:
-            self.get_logger().warn(
-                "No CARLA map available — generating straight-line fallback waypoints."
-            )
-            return self._straight_line_fallback(ros_x, ros_y)
-
-        step   = self.get_parameter("wp_step_m").value
-        count  = self.get_parameter("wp_lookahead_count").value
-
-        # Convert ROS position back to CARLA frame (negate Y)
-        carla_loc = carla.Location(x=ros_x, y=-ros_y, z=0.5)
-
-        try:
-            start_wp = self._carla_map.get_waypoint(
-                carla_loc,
-                project_to_road=True,
-                lane_type=carla.LaneType.Driving
-            )
-
-            # Check if the waypoint lane direction matches the car's heading.
-            # If the road yaw differs by more than 90 degrees, flip to the opposite lane.
-            wp_yaw_rad   = math.radians(start_wp.transform.rotation.yaw)
-            # Convert car yaw from ROS to CARLA (negate)
-            car_yaw_carla = -yaw  # yaw is the ROS yaw passed into this function
-            angle_diff = abs(math.atan2(math.sin(wp_yaw_rad - car_yaw_carla),
-                                        math.cos(wp_yaw_rad - car_yaw_carla)))
-            if angle_diff > math.pi / 2:
-                # We're on the oncoming lane — get the lane to the right instead
-                start_wp = start_wp.get_left_lane() or start_wp
-        except Exception as e:
-            self.get_logger().error(f"get_waypoint failed: {e}")
-            return self._straight_line_fallback(ros_x, ros_y)
-
-        waypoints = []
-        current   = start_wp
-
-        for _ in range(count):
-            nexts = current.next(step)
-            if not nexts:
-                self.get_logger().warn("Road graph ended — no more waypoints ahead.")
-                break
-            # next() can return multiple options at junctions; take the first
-            # (straight-ish) one. Later in Phase 2 a planner will choose.
-            current = nexts[0]
-            carla_x = current.transform.location.x
-            carla_y = current.transform.location.y
-            # Apply ROS frame conversion
-            waypoints.append((carla_x, -carla_y))
-
-        # --- validate: first waypoint must be ahead of the car ---
-        if waypoints:
-            dx = waypoints[0][0] - ros_x
-            dy = waypoints[0][1] - ros_y
-            forward_x = math.cos(yaw)
-            forward_y = math.sin(yaw)
-            dot = dx * forward_x + dy * forward_y
-            if dot < 0:
-                self.get_logger().warn(
-                    f'Waypoint set rejected — first WP is behind the car '
-                    f'(dot={dot:.2f}). Trying other lane.'
-                )
-                # Flip lane and try again
-                other = start_wp.get_left_lane() or start_wp.get_right_lane()
-                if other:
-                    start_wp = other
-                    waypoints = []
-                    wp = start_wp
-                    for _ in range(self._wp_lookahead_count):
-                        loc = wp.transform.location
-                        waypoints.append((loc.x, -loc.y))
-                        nexts = wp.next(self._wp_step_m)
-                        if not nexts:
-                            break
-                        wp = nexts[0]
+        self.create_subscription(
+            Path,
+            "/planning/trajectory",
+            self._trajectory_cb,
+            latched_qos,
+        )
 
         self.get_logger().info(
-            f"Generated {len(waypoints)} road waypoints  "
-            f"start=({waypoints[0][0]:.1f},{waypoints[0][1]:.1f})  "
-            f"end=({waypoints[-1][0]:.1f},{waypoints[-1][1]:.1f})"
+            "PurePursuitController (Phase 2) ready — "
+            "waiting for /planning/trajectory and /carla/ego_vehicle/odometry …"
         )
-        return waypoints
 
-    def _straight_line_fallback(self, ros_x: float, ros_y: float):
-        """Emergency fallback: 20 waypoints straight ahead (no map needed)."""
-        self.get_logger().warn(
-            "Using straight-line fallback — may drive off-road. "
-            "Fix the CARLA Python API connection."
+    # ── Trajectory callback ───────────────────────────────────────────────
+
+    def _trajectory_cb(self, msg: Path):
+        """
+        Convert nav_msgs/Path → internal waypoint list.
+
+        Only (x, y) is used by the Pure Pursuit law; yaw from the planner
+        is stored but not yet consumed (reserved for Phase 3 preview heading).
+        """
+        self._waypoints = [
+            (ps.pose.position.x, ps.pose.position.y)
+            for ps in msg.poses
+        ]
+        self._last_trajectory_stamp = time.monotonic()
+
+        self.get_logger().debug(
+            f"Trajectory updated — {len(self._waypoints)} WPs received."
         )
-        # This reuses whatever yaw the car had at first odom tick,
-        # but we don't have yaw here — so just go along X axis.
-        # Caller (_init_waypoints) passes yaw separately; this is best effort.
-        return [(ros_x + i * 5.0, ros_y) for i in range(1, 21)]
 
-    # ------------------------------------------------------------------
-    # Initialisation
-    # ------------------------------------------------------------------
-    def _init_waypoints(self, px: float, py: float, yaw: float):
-        self._waypoints = self._generate_road_waypoints(px, py, yaw)
-        self._initialised = True
-        self._slow_since  = None
-        self._is_stuck    = False
+    # ── Odometry callback (main control loop) ─────────────────────────────
 
-    # ------------------------------------------------------------------
-    # Stuck detection
-    # ------------------------------------------------------------------
-    def _check_stuck(self, speed: float) -> bool:
-        thresh   = self.get_parameter("stuck_speed_thresh").value
-        timeout  = self.get_parameter("stuck_timeout").value
-        now      = time.monotonic()
+    def _odom_cb(self, msg: Odometry):
+        px    = msg.pose.pose.position.x
+        py    = msg.pose.pose.position.y
+        yaw   = quaternion_to_yaw(msg.pose.pose.orientation)
+        speed = math.hypot(msg.twist.twist.linear.x, msg.twist.twist.linear.y)
+
+        # Skip CARLA startup artefact (briefly at 0,0)
+        if abs(px) < 0.1 and abs(py) < 0.1:
+            return
+
+        self._tick += 1
+        debug = (self._tick % self._p("debug_interval") == 0)
+
+        # ── Guard: no trajectory yet ──────────────────────────────────────
+        now = time.monotonic()
+        if self._last_trajectory_stamp is None:
+            if debug:
+                self.get_logger().warn(
+                    "No trajectory received yet — waiting for planner_node."
+                )
+            self._publish(0.0, 0.0, 0.0)
+            return
+
+        traj_age = now - self._last_trajectory_stamp
+        if traj_age > self._p("trajectory_timeout"):
+            self.get_logger().warn(
+                f"Trajectory stale ({traj_age:.1f} s) — braking. "
+                "Is planner_node running?"
+            )
+            self._publish(0.0, 0.0, 1.0)
+            return
+
+        # ── Stuck detection ───────────────────────────────────────────────
+        if self._check_stuck(speed, now):
+            self._publish(0.0, 0.0, 1.0)
+            return
+
+        if debug:
+            self.get_logger().info(
+                f"[ego]  pos=({px:.2f}, {py:.2f})  "
+                f"yaw={math.degrees(yaw):.1f}°  speed={speed:.2f} m/s  "
+                f"wps_remaining={len(self._waypoints)}"
+            )
+
+        # ── Prune passed waypoints ────────────────────────────────────────
+        self._prune_passed(px, py, yaw)
+
+        # ── Find lookahead target ─────────────────────────────────────────
+        target = self._find_lookahead(px, py, yaw, debug)
+        if target is None:
+            if debug:
+                self.get_logger().warn(
+                    "No lookahead target — trajectory exhausted. "
+                    "Waiting for planner to extend it."
+                )
+            # Don't brake hard; planner will extend shortly
+            self._publish(0.0, 0.0, 0.0)
+            return
+
+        tx, ty = target
+
+        # ── Body-frame transform ──────────────────────────────────────────
+        dx, dy  = tx - px, ty - py
+        c,  s   = math.cos(-yaw), math.sin(-yaw)
+        local_x =  c * dx - s * dy
+        local_y =  s * dx + c * dy
+
+        if debug:
+            self.get_logger().info(
+                f"[pursuit]  target=({tx:.2f}, {ty:.2f})  "
+                f"local=({local_x:.2f}, {local_y:.2f})"
+            )
+
+        # ── Pure Pursuit steering ─────────────────────────────────────────
+        ld = math.hypot(local_x, local_y)
+        if ld < 1e-3:
+            steer_raw = 0.0
+        else:
+            curvature       = (2.0 * local_y) / (ld ** 2)
+            L               = self._p("wheelbase")
+            steer_angle_rad = math.atan(curvature * L)
+            steer_raw       = steer_angle_rad / math.radians(70.0)
+
+        gain  = self._p("steering_gain")
+        max_s = self._p("max_steer")
+        steer = float(max(-max_s, min(max_s, -steer_raw * gain)))  # note negation
+
+        if debug:
+            self.get_logger().info(
+                f"[steer]  local_y={local_y:.3f}  raw={steer_raw:.4f}  "
+                f"final={steer:.4f}  "
+                f"({'RIGHT' if steer > 0 else 'LEFT' if steer < 0 else 'STRAIGHT'})"
+            )
+
+        # ── Speed P-controller ────────────────────────────────────────────
+        target_speed = self._p("target_speed")
+        throttle = float(
+            max(0.0, min(1.0, self._p("kp_speed") * (target_speed - speed)))
+        )
+
+        if debug:
+            self.get_logger().info(
+                f"[speed]  target={target_speed:.1f}  "
+                f"current={speed:.2f}  throttle={throttle:.3f}"
+            )
+
+        self._publish(throttle, steer, 0.0)
+
+    # ── Waypoint helpers ──────────────────────────────────────────────────
+
+    def _prune_passed(self, px: float, py: float, yaw: float):
+        """Drop waypoints that are now behind the vehicle."""
+        hx = math.cos(yaw)
+        hy = math.sin(yaw)
+        while self._waypoints:
+            wx, wy = self._waypoints[0]
+            dx, dy = wx - px, wy - py
+            if dx * hx + dy * hy > 0.0:
+                break
+            self._waypoints.pop(0)
+
+    def _find_lookahead(
+        self,
+        px: float,
+        py: float,
+        yaw: float,
+        debug: bool = False,
+    ) -> tuple[float, float] | None:
+        """
+        Return the first waypoint at least `lookahead_distance` ahead of ego.
+        Falls back to the final waypoint in the buffer if none is far enough.
+        """
+        ld = self._p("lookahead_distance")
+
+        for (wx, wy) in self._waypoints:
+            if math.hypot(wx - px, wy - py) >= ld:
+                return (wx, wy)
+
+        # All WPs closer than lookahead (near end of trajectory)
+        if self._waypoints:
+            return self._waypoints[-1]
+
+        return None
+
+    # ── Stuck detection ───────────────────────────────────────────────────
+
+    def _check_stuck(self, speed: float, now: float) -> bool:
+        thresh   = self._p("stuck_speed_thresh")
+        timeout  = self._p("stuck_timeout")
 
         if speed < thresh:
             if self._slow_since is None:
@@ -269,164 +304,36 @@ class PurePursuitController(Node):
             elif now - self._slow_since > timeout:
                 if not self._is_stuck:
                     self.get_logger().warn(
-                        f"STUCK: speed={speed:.2f} m/s for >{timeout:.0f}s. "
-                        "Applying brakes. Reset the car and relaunch the controller."
+                        f"STUCK: speed={speed:.2f} m/s for >{timeout:.0f} s. "
+                        "Braking. Reset vehicle and relaunch."
                     )
                     self._is_stuck = True
                 return True
         else:
-            # Moving again — clear stuck state
             self._slow_since = None
             self._is_stuck   = False
 
         return False
 
-    # ------------------------------------------------------------------
-    # Main control callback
-    # ------------------------------------------------------------------
-    def _odom_callback(self, msg: Odometry):
-        px  = msg.pose.pose.position.x
-        py  = msg.pose.pose.position.y
-        yaw = quaternion_to_yaw(msg.pose.pose.orientation)
-        speed = math.hypot(msg.twist.twist.linear.x, msg.twist.twist.linear.y)
+    # ── Helpers ───────────────────────────────────────────────────────────
 
-        # Skip if position hasn't initialised yet (CARLA sends 0,0 briefly on startup)
-        if not self._initialised and abs(px) < 0.1 and abs(py) < 0.1:
-            return
-
-        if not self._initialised:
-            self._init_waypoints(px, py, yaw)
-            return
-
-        self._tick += 1
-        debug = (self._tick % self._param("debug_interval") == 0)
-
-        # ---- Stuck check ------------------------------------------------
-        if self._check_stuck(speed):
-            self._publish(0.0, 0.0, 1.0)
-            return
-
-        if debug:
-            self.get_logger().info(
-                f"[ego] pos=({px:.2f}, {py:.2f})  "
-                f"yaw={math.degrees(yaw):.1f}°  speed={speed:.2f} m/s  "
-                f"wps_remaining={len(self._waypoints)}"
-            )
-
-        # ---- Lookahead waypoint -----------------------------------------
-        target = self._find_lookahead_waypoint(px, py, yaw, debug)
-
-        if target is None:
-            # End of road segment — regenerate from current position
-            self.get_logger().info("End of waypoints — regenerating road waypoints…")
-            self._init_waypoints(px, py, yaw)
-            target = self._find_lookahead_waypoint(px, py, yaw, debug)
-
-        if target is None:
-            self.get_logger().warn("Still no waypoint after regeneration — braking.")
-            self._publish(0.0, 0.0, 1.0)
-            return
-
-        tx, ty = target
-
-        # ---- Body-frame transform ----------------------------------------
-        dx, dy = tx - px, ty - py
-        c, s   = math.cos(-yaw), math.sin(-yaw)
-        local_x =  c * dx - s * dy
-        local_y =  s * dx + c * dy
-
-        if debug:
-            self.get_logger().info(
-                f"[pursuit] target=({tx:.2f},{ty:.2f})  "
-                f"local_x={local_x:.2f}  local_y={local_y:.2f}"
-            )
-
-        # ---- Pure Pursuit steering ---------------------------------------
-        # CARLA sign convention: positive steer = RIGHT turn
-        # When local_y > 0 (target to LEFT) we want LEFT = negative steer
-        ld = math.hypot(local_x, local_y)
-        if ld < 1e-3:
-            steer_raw = 0.0
-        else:
-            curvature       = (2.0 * local_y) / (ld ** 2)
-            L               = self._param("wheelbase")
-            steer_angle_rad = math.atan(curvature * L)
-            steer_raw       = steer_angle_rad / math.radians(70.0)
-
-        gain  = self._param("steering_gain")
-        max_s = self._param("max_steer")
-        steer = float(max(-max_s, min(max_s, -steer_raw * gain)))  # note negation
-
-        if debug:
-            self.get_logger().info(
-                f"[steer] local_y={local_y:.3f}  raw={steer_raw:.4f}  "
-                f"final={steer:.4f}  "
-                f"({'RIGHT' if steer > 0 else 'LEFT' if steer < 0 else 'STRAIGHT'})"
-            )
-
-        # ---- Speed P controller -----------------------------------------
-        target_speed = self._param("target_speed")
-        throttle     = float(max(0.0, min(1.0, self._param("kp_speed") * (target_speed - speed))))
-
-        if debug:
-            self.get_logger().info(
-                f"[speed] target={target_speed:.1f}  "
-                f"current={speed:.2f}  throttle={throttle:.3f}"
-            )
-
-        self._publish(throttle, steer, 0.0)
-
-    # ------------------------------------------------------------------
-    # Waypoint selection — consume waypoints as we pass them
-    # ------------------------------------------------------------------
-    def _find_lookahead_waypoint(self, px, py, yaw, debug=False):
-        """
-        Drop any waypoints that are now behind the vehicle, then return
-        the first one that is at least lookahead_distance ahead.
-
-        Consuming passed waypoints keeps the list from growing stale and
-        ensures the car never chases a point it has already passed.
-        """
-        ld = self._param("lookahead_distance")
-        hx = math.cos(yaw)
-        hy = math.sin(yaw)
-
-        # Drop waypoints that are now behind us
-        while self._waypoints:
-            wx, wy = self._waypoints[0]
-            dx, dy = wx - px, wy - py
-            if dx * hx + dy * hy > 0.0:   # still ahead
-                break
-            self._waypoints.pop(0)         # behind — discard
-
-        # Find first waypoint beyond lookahead distance
-        for (wx, wy) in self._waypoints:
-            dx, dy = wx - px, wy - py
-            if math.hypot(dx, dy) >= ld:
-                return (wx, wy)
-
-        # All remaining waypoints are closer than lookahead (near end of list)
-        if self._waypoints:
-            return self._waypoints[-1]     # aim at the last one
-
-        return None
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-    def _param(self, name):
+    def _p(self, name):
         return self.get_parameter(name).value
 
-    def _publish(self, throttle, steer, brake):
+    def _publish(self, throttle: float, steer: float, brake: float):
         cmd = CarlaEgoVehicleControl()
-        cmd.throttle = float(throttle)
-        cmd.steer    = float(steer)
-        cmd.brake    = float(brake)
+        cmd.throttle          = float(throttle)
+        cmd.steer             = float(steer)
+        cmd.brake             = float(brake)
         cmd.hand_brake        = False
         cmd.reverse           = False
         cmd.manual_gear_shift = False
-        self.cmd_pub.publish(cmd)
+        self._cmd_pub.publish(cmd)
 
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 def main(args=None):
     rclpy.init(args=args)

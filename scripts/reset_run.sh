@@ -1,22 +1,15 @@
 #!/usr/bin/env bash
 # scripts/reset_run.sh
-# ---------------------
-# Kills the spawn_objects node, controller, and any active bag recording,
-# waits for CARLA to despawn all actors, then relaunches everything.
-# A new timestamped bag is recorded for every run automatically.
-#
-# Usage  : ./scripts/reset_run.sh
-# Run from: av-autonomy-stack/
 
 set -e
 
 source carla_ros_ws/install/setup.bash
 
-# ---- Create bags directory if it doesn't exist -------------------------
 mkdir -p bags
 
 # ---- Stop everything from the previous run -----------------------------
 echo "==> Stopping previous run..."
+pkill -f "road_graph_planner"       2>/dev/null || true   
 pkill -f "pure_pursuit_controller"  2>/dev/null || true
 pkill -f "carla_spawn_objects"      2>/dev/null || true
 pkill -f "ros2 bag record"          2>/dev/null || true
@@ -36,10 +29,9 @@ ros2 bag record \
     /carla/ego_vehicle/speedometer \
     /carla/ego_vehicle/collision \
     /carla/ego_vehicle/lane_invasion \
+    /planning/trajectory \
     &
 BAG_PID=$!
-
-# Give the recorder a moment to initialise before the car starts moving
 sleep 1
 
 # Apply custom objects.json
@@ -54,6 +46,14 @@ SPAWN_PID=$!
 echo "==> Waiting for objects to spawn (5 s)..."
 sleep 5
 
+# ---- Relaunch planner --------------------------------------------------
+echo "==> Relaunching planner..."                          
+ros2 launch av_planning planner.launch.py &
+PLANNER_PID=$!
+
+echo "==> Waiting for planner to connect to CARLA (4 s)..."
+sleep 4
+
 # ---- Relaunch controller -----------------------------------------------
 echo "==> Relaunching controller..."
 ros2 launch av_control controller.launch.py &
@@ -64,14 +64,14 @@ echo ""
 echo "==> Run started."
 echo "    Bag         : $BAG_PATH"
 echo "    spawn PID   : $SPAWN_PID"
+echo "    planner PID : $PLANNER_PID"      
 echo "    controller  : $CTRL_PID"
 echo "    bag PID     : $BAG_PID"
 echo ""
 echo "    Press Ctrl+C to stop this run and save the bag."
 
-# Stop everything cleanly on Ctrl+C
 trap "echo ''; echo '==> Stopping run...'; \
-      kill $CTRL_PID $SPAWN_PID $BAG_PID 2>/dev/null; \
+      kill $CTRL_PID $PLANNER_PID $SPAWN_PID $BAG_PID 2>/dev/null; \
       echo '==> Bag saved to $BAG_PATH'; \
       echo '==> Run stopped.'" INT
 

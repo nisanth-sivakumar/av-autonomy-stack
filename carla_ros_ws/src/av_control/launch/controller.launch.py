@@ -9,10 +9,9 @@ def generate_launch_description():
             executable='controller_node',
             name='pure_pursuit_controller',
             parameters=[{
-                'carla_host': '172.25.80.1',  
-                'target_speed': 3.0,
+                'target_speed':       3.0,
                 'lookahead_distance': 6.0,
-                'debug_interval': 10,
+                'debug_interval':     10,
             }],
             output='screen',
         )
