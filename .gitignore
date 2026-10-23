@@ -4,3 +4,10 @@ carla_ros_ws/log/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+
+# stray colcon output from building at the repo root (use carla_ros_ws/)
+/build/
+/install/
+/log/
+# recorded runs
+bags/
