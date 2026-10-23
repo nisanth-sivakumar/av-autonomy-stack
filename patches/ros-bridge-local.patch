@@ -1,0 +1,173 @@
+diff --git a/carla_ros_bridge/src/carla_ros_bridge/bridge.py b/carla_ros_bridge/src/carla_ros_bridge/bridge.py
+index 9e34f49..9f88ea3 100755
+--- a/carla_ros_bridge/src/carla_ros_bridge/bridge.py
++++ b/carla_ros_bridge/src/carla_ros_bridge/bridge.py
+@@ -12,6 +12,8 @@ Class that handle communication between CARLA and ROS
+ """
+ 
+ import os
++import time
++import traceback
+ import pkg_resources
+ try:
+     import queue
+@@ -251,37 +253,51 @@ class CarlaRosBridge(CompatibleNode):
+         execution loop for synchronous mode
+         """
+         while not self.shutdown.is_set() and roscomp.ok():
+-            self.process_run_state()
+-
+-            if self.parameters['synchronous_mode_wait_for_vehicle_control_command']:
+-                # fill list of available ego vehicles
+-                self._expected_ego_vehicle_control_command_ids = []
+-                with self._expected_ego_vehicle_control_command_ids_lock:
+-                    for actor_id, actor in self.actor_factory.actors.items():
+-                        if isinstance(actor, EgoVehicle):
+-                            self._expected_ego_vehicle_control_command_ids.append(
+-                                actor_id)
+-
+-            self.actor_factory.update_available_objects()
+-            frame = self.carla_world.tick()
+-
+-            world_snapshot = self.carla_world.get_snapshot()
+-
+-            self.status_publisher.set_frame(frame)
+-            self.update_clock(world_snapshot.timestamp)
+-            self.logdebug("Tick for frame {} returned. Waiting for sensor data...".format(
+-                frame))
+-            self._update(frame, world_snapshot.timestamp.elapsed_seconds)
+-            self.logdebug("Waiting for sensor data finished.")
+-
+-            if self.parameters['synchronous_mode_wait_for_vehicle_control_command']:
+-                # wait for all ego vehicles to send a vehicle control command
+-                if self._expected_ego_vehicle_control_command_ids:
+-                    if not self._all_vehicle_control_commands_received.wait(CarlaRosBridge.VEHICLE_CONTROL_TIMEOUT):
+-                        self.logwarn("Timeout ({}s) while waiting for vehicle control commands. "
+-                                     "Missing command from actor ids {}".format(CarlaRosBridge.VEHICLE_CONTROL_TIMEOUT,
+-                                                                                self._expected_ego_vehicle_control_command_ids))
+-                    self._all_vehicle_control_commands_received.clear()
++            # An uncaught exception here kills this thread while the node
++            # stays up; in synchronous mode nothing else ticks CARLA, so the
++            # whole simulation silently freezes. Log and keep ticking instead.
++            try:
++                self._synchronous_mode_step()
++            except Exception:  # pylint: disable=broad-except
++                self.logerr("Synchronous update failed, continuing:\n{}".format(
++                    traceback.format_exc()))
++                time.sleep(0.1)
++
++    def _synchronous_mode_step(self):
++        """
++        one iteration of the synchronous mode loop
++        """
++        self.process_run_state()
++
++        if self.parameters['synchronous_mode_wait_for_vehicle_control_command']:
++            # fill list of available ego vehicles
++            self._expected_ego_vehicle_control_command_ids = []
++            with self._expected_ego_vehicle_control_command_ids_lock:
++                for actor_id, actor in self.actor_factory.actors.items():
++                    if isinstance(actor, EgoVehicle):
++                        self._expected_ego_vehicle_control_command_ids.append(
++                            actor_id)
++
++        self.actor_factory.update_available_objects()
++        frame = self.carla_world.tick()
++
++        world_snapshot = self.carla_world.get_snapshot()
++
++        self.status_publisher.set_frame(frame)
++        self.update_clock(world_snapshot.timestamp)
++        self.logdebug("Tick for frame {} returned. Waiting for sensor data...".format(
++            frame))
++        self._update(frame, world_snapshot.timestamp.elapsed_seconds)
++        self.logdebug("Waiting for sensor data finished.")
++
++        if self.parameters['synchronous_mode_wait_for_vehicle_control_command']:
++            # wait for all ego vehicles to send a vehicle control command
++            if self._expected_ego_vehicle_control_command_ids:
++                if not self._all_vehicle_control_commands_received.wait(CarlaRosBridge.VEHICLE_CONTROL_TIMEOUT):
++                    self.logwarn("Timeout ({}s) while waiting for vehicle control commands. "
++                                 "Missing command from actor ids {}".format(CarlaRosBridge.VEHICLE_CONTROL_TIMEOUT,
++                                                                            self._expected_ego_vehicle_control_command_ids))
++                self._all_vehicle_control_commands_received.clear()
+ 
+     def _carla_time_tick(self, carla_snapshot):
+         """
+@@ -389,9 +405,9 @@ def main(args=None):
+ 
+     parameters['host'] = carla_bridge.get_param('host', 'localhost')
+     parameters['port'] = carla_bridge.get_param('port', 2000)
+-    parameters['timeout'] = carla_bridge.get_param('timeout', 2)
++    parameters['timeout'] = carla_bridge.get_param('timeout', 20)
+     parameters['passive'] = carla_bridge.get_param('passive', False)
+-    parameters['synchronous_mode'] = carla_bridge.get_param('synchronous_mode', True)
++    parameters['synchronous_mode'] = carla_bridge.get_param('synchronous_mode', False)
+     parameters['synchronous_mode_wait_for_vehicle_control_command'] = carla_bridge.get_param(
+         'synchronous_mode_wait_for_vehicle_control_command', False)
+     parameters['fixed_delta_seconds'] = carla_bridge.get_param('fixed_delta_seconds',
+@@ -413,10 +429,18 @@ def main(args=None):
+ 
+         # check carla version
+         dist = pkg_resources.get_distribution("carla")
+-        if LooseVersion(dist.version) != LooseVersion(CarlaRosBridge.CARLA_VERSION):
+-            carla_bridge.logfatal("CARLA python module version {} required. Found: {}".format(
+-                CarlaRosBridge.CARLA_VERSION, dist.version))
++        # Relax version check: allow compatible 0.9.x versions
++        if not dist.version.startswith("0.9"):
++            carla_bridge.logfatal(
++                "Incompatible CARLA version. Expected 0.9.x, found: {}".format(dist.version)
++            )
+             sys.exit(1)
++        else:
++            carla_bridge.logwarn(
++                "Running with CARLA version {} (expected {}). Continuing...".format(
++                    dist.version, CarlaRosBridge.CARLA_VERSION
++                )
++            )
+ 
+         if LooseVersion(carla_client.get_server_version()) != \
+            LooseVersion(carla_client.get_client_version()):
+diff --git a/carla_ros_bridge/src/carla_ros_bridge/camera.py b/carla_ros_bridge/src/carla_ros_bridge/camera.py
+index c9404e2..31c2b5b 100644
+--- a/carla_ros_bridge/src/carla_ros_bridge/camera.py
++++ b/carla_ros_bridge/src/carla_ros_bridge/camera.py
+@@ -452,7 +452,7 @@ class DVSCamera(Camera):
+                                                 ('x', numpy.uint16),
+                                                 ('y', numpy.uint16),
+                                                 ('t', numpy.int64),
+-                                                ('pol', numpy.bool)
++                                                ('pol', numpy.bool_)  # numpy.bool was removed in NumPy 1.24
+                                             ]))
+         carla_image_data_array = numpy.zeros(
+             (carla_dvs_event_array.height, carla_dvs_event_array.width, 3),
+diff --git a/pcl_recorder/CMakeLists.txt b/pcl_recorder/CMakeLists.txt
+index 546f863..8e97619 100644
+--- a/pcl_recorder/CMakeLists.txt
++++ b/pcl_recorder/CMakeLists.txt
+@@ -51,6 +51,8 @@ elseif(${ROS_VERSION} EQUAL 2)
+   find_package(sensor_msgs COMPONENTS)
+   find_package(tf2 REQUIRED)
+   find_package(tf2_eigen REQUIRED)
++  # Make sure the include directories are passed to the compiler
++  include_directories(${tf2_eigen_INCLUDE_DIRS})
+   find_package(tf2_geometry_msgs REQUIRED)
+   find_package(tf2_ros REQUIRED)
+   find_package(pcl_conversions REQUIRED)
+@@ -65,8 +67,14 @@ elseif(${ROS_VERSION} EQUAL 2)
+ 
+   add_executable(${PROJECT_NAME}_node src/PclRecorderROS2.cpp src/mainROS2.cpp)
+ 
+-  ament_target_dependencies(${PROJECT_NAME}_node rclcpp sensor_msgs
+-                            pcl_conversions tf2 tf2_ros)
++  ament_target_dependencies(${PROJECT_NAME}_node
++  rclcpp
++  sensor_msgs
++  pcl_conversions
++  tf2
++  tf2_ros
++  tf2_eigen
++  )
+ 
+   target_link_libraries(${PROJECT_NAME}_node ${Boost_SYSTEM_LIBRARY}
+                         ${PCL_LIBRARIES})
