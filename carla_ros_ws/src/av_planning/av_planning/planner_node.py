@@ -1,26 +1,32 @@
 #!/usr/bin/env python3
 """
-planner_node.py — Phase 3 update  (Perception-aware planning)
-==============================================================
+planner_node.py — Perception-aware planning
+============================================
 Subscribes : /carla/ego_vehicle/odometry   (nav_msgs/Odometry)
              /planning/goal                (geometry_msgs/PointStamped)
-             /perception/obstacles         (geometry_msgs/PoseArray)   ← NEW Phase 3
-             /perception/lane_offset       (std_msgs/Float32)          ← NEW Phase 3
+             /perception/obstacles         (geometry_msgs/PoseArray)
+             /perception/lane_offset       (std_msgs/Float32)       
 Publishes  : /planning/trajectory          (nav_msgs/Path)
              /planning/debug/trajectory    (nav_msgs/Path)
 
-Phase 3 changes from Phase 2b
-------------------------------
-- Subscribes to /perception/obstacles published by perception_node.
-  Obstacle positions are passed directly into the lattice and MPPI
-  planners, which already have the obstacle avoidance cost implemented.
+Planning modes (parameter `planner_type`)
+------------------------------------------
+- road_graph : lane centre-line from the CARLA road graph.  Rolling
+               buffer — replaced by a fresh walk from the ego pose when
+               fewer than `replan_threshold` waypoints remain.  Ignores
+               obstacles (the controller still slows/stops for them).
+- lattice    : replans every tick (receding horizon) so it reacts to
+               obstacles; candidates blend from the ego's current lateral
+               offset to a sampled target offset.
+- mppi       : replans every tick; warm-start shifted by ego progress.
 
-- Subscribes to /perception/lane_offset.  The lane offset is used to
-  log a warning when the ego drifts significantly from lane centre, and
-  is available as a hook for future bias of the MPPI nominal offset.
-
-- No changes to the controller.  The planning/control interface
-  (/planning/trajectory) is unchanged.
+Perception inputs
+-----------------
+- /perception/obstacles  → passed to lattice / MPPI as point obstacles.
+- /perception/lane_offset → monitored only (warning above
+  `lane_offset_warn_m`).  The planner's centre-line comes from the
+  CARLA map, which is ground truth in simulation, so the vision estimate
+  is not fed back into planning; it is recorded for validation instead.
 
 Coordinate conventions
 ----------------------
@@ -28,7 +34,9 @@ Coordinate conventions
 """
 
 import math
+import time
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import (
     QoSProfile,
@@ -90,6 +98,9 @@ class RoadGraphPlanner(Node):
         # Road graph
         self.declare_parameter("wp_step_m",            3.0)
         self.declare_parameter("wp_lookahead_count",   80)
+        # Route persistence: keep walking the previous route while the ego
+        # is within this distance of it (re-project onto the map otherwise)
+        self.declare_parameter("route_max_deviation_m", 4.0)
 
         # Rolling buffer (road_graph + lattice only)
         self.declare_parameter("replan_threshold",     20)
@@ -111,14 +122,21 @@ class RoadGraphPlanner(Node):
         self.declare_parameter("mppi_w_deviation",     0.2)
         self.declare_parameter("mppi_w_obstacle",      10.0)
 
+        self.declare_parameter("mppi_min_clearance",   2.8)
+
         # Lattice
         self.declare_parameter("lattice_num_offsets",  7)
         self.declare_parameter("lattice_max_offset",   1.8)
+        self.declare_parameter("lattice_transition_m", 15.0)
         self.declare_parameter("lattice_w_deviation",  1.0)
         self.declare_parameter("lattice_w_curvature",  0.5)
         self.declare_parameter("lattice_w_smoothness", 0.3)
+        self.declare_parameter("lattice_w_clearance",  2.0)
+        self.declare_parameter("lattice_w_consistency", 0.5)
+        self.declare_parameter("lattice_min_clearance", 2.6)
+        self.declare_parameter("lattice_comfort_clearance", 3.2)
 
-        # Phase 3 — perception integration
+        # Perception integration
         self.declare_parameter("lane_offset_warn_m",   0.5)   # log warn above this drift
 
         # Output
@@ -136,12 +154,19 @@ class RoadGraphPlanner(Node):
         self._planner_type = planner_type
 
         # ── Sub-planners ──────────────────────────────────────────────────
+        p = lambda name: self.get_parameter(name).value  # noqa: E731
         self._lattice = LatticePlanner(LatticeConfig(
-            num_offsets  = self.get_parameter("lattice_num_offsets").value,
-            max_offset_m = self.get_parameter("lattice_max_offset").value,
-            w_deviation  = self.get_parameter("lattice_w_deviation").value,
-            w_curvature  = self.get_parameter("lattice_w_curvature").value,
-            w_smoothness = self.get_parameter("lattice_w_smoothness").value,
+            num_offsets         = p("lattice_num_offsets"),
+            max_offset_m        = p("lattice_max_offset"),
+            transition_length_m = p("lattice_transition_m"),
+            wp_step_m           = p("wp_step_m"),
+            w_deviation         = p("lattice_w_deviation"),
+            w_curvature         = p("lattice_w_curvature"),
+            w_smoothness        = p("lattice_w_smoothness"),
+            w_clearance         = p("lattice_w_clearance"),
+            w_consistency       = p("lattice_w_consistency"),
+            min_clearance_m     = p("lattice_min_clearance"),
+            comfort_clearance_m = p("lattice_comfort_clearance"),
         ))
 
         self._mppi = MPPIPlanner(MPPIConfig(
@@ -155,6 +180,7 @@ class RoadGraphPlanner(Node):
             w_smoothness       = self.get_parameter("mppi_w_smoothness").value,
             w_deviation        = self.get_parameter("mppi_w_deviation").value,
             w_obstacle         = self.get_parameter("mppi_w_obstacle").value,
+            min_clearance_m    = self.get_parameter("mppi_min_clearance").value,
         ))
 
         # ── State ─────────────────────────────────────────────────────────
@@ -164,11 +190,16 @@ class RoadGraphPlanner(Node):
         self._ego_speed: float        = 0.0
         self._trajectory: list[tuple[float, float, float]] = []
         self._carla_map  = None
+        # CARLA waypoints of the last road-graph walk (route persistence)
+        self._route: list = []
         self._goal:      tuple[float, float] | None = None
         self._goal_reached = False
+        self._last_plan_xy: tuple[float, float] | None = None   # previous centre-line start (MPPI warm-start shift)
 
-        # Phase 3 perception state
+        # Perception state
         self._obstacle_positions: list[tuple[float, float]] = []
+        self._obstacle_stamp: float | None = None
+        self._tick = 0
         self._lane_offset: float = 0.0
 
         # ── CARLA ─────────────────────────────────────────────────────────
@@ -198,7 +229,7 @@ class RoadGraphPlanner(Node):
         self.create_subscription(
             PointStamped, "/planning/goal", self._goal_cb, 10
         )
-        # Phase 3: perception inputs
+        # Perception inputs
         self.create_subscription(
             PoseArray, "/perception/obstacles", self._obstacles_cb, 10
         )
@@ -245,7 +276,9 @@ class RoadGraphPlanner(Node):
         self._goal         = (msg.point.x, msg.point.y)
         self._goal_reached = False
         self._trajectory   = []
+        self._route        = []
         self._mppi.reset()
+        self._lattice.reset()
         self.get_logger().info(f"New goal: ({self._goal[0]:.2f}, {self._goal[1]:.2f})")
 
     def _obstacles_cb(self, msg: PoseArray):
@@ -257,6 +290,7 @@ class RoadGraphPlanner(Node):
             (p.position.x, p.position.y)
             for p in msg.poses
         ]
+        self._obstacle_stamp = time.monotonic()
 
     def _lane_offset_cb(self, msg: Float32):
         """
@@ -267,7 +301,8 @@ class RoadGraphPlanner(Node):
         warn_threshold = self.get_parameter("lane_offset_warn_m").value
         if abs(self._lane_offset) > warn_threshold:
             self.get_logger().warn(
-                f"[lane] Ego drifted {self._lane_offset:+.2f} m from lane centre."
+                f"[lane] Ego drifted {self._lane_offset:+.2f} m from lane centre.",
+                throttle_duration_sec=2.0,
             )
 
     # ── Planning loop ─────────────────────────────────────────────────────
@@ -275,6 +310,10 @@ class RoadGraphPlanner(Node):
     def _plan_and_publish(self):
         if self._ego_x is None:
             return
+        # Drop the obstacle list if perception has gone quiet
+        if self._obstacle_stamp is not None and time.monotonic() - self._obstacle_stamp > 1.0:
+            self._obstacle_positions = []
+            self._obstacle_stamp = None
         if abs(self._ego_x) < 0.1 and abs(self._ego_y) < 0.1:
             return
 
@@ -284,38 +323,32 @@ class RoadGraphPlanner(Node):
                 self.get_logger().info(f"Goal reached (dist={dist:.2f} m).")
                 self._goal_reached = True
 
-        if self._planner_type == "mppi":
-            # MPPI: receding horizon — always replace, never buffer
-            centre_line      = self._get_centre_line(self._ego_x, self._ego_y, self._ego_yaw)
+        if self._planner_type in ("mppi", "lattice"):
+            # Receding horizon: re-optimise against the latest obstacles every tick
+            centre_line = self._get_centre_line(self._ego_x, self._ego_y, self._ego_yaw)
             self._trajectory = self._dispatch_planner(centre_line)
-            self.get_logger().info(
-                f"[mppi] {len(self._trajectory)} WPs  "
-                f"obstacles={len(self._obstacle_positions)}  "
-                f"lane_offset={self._lane_offset:+.2f} m"
-            )
-        else:
-            # road_graph / lattice: rolling buffer
-            self._prune_passed()
-            replan_thresh = self.get_parameter("replan_threshold").value
-            max_len       = self.get_parameter("max_trajectory_len").value
-
-            if len(self._trajectory) < replan_thresh:
+            if self._tick % 10 == 0:
                 self.get_logger().info(
-                    f"[{self._planner_type}] Replanning — "
-                    f"{len(self._trajectory)} WPs remaining  "
+                    f"[{self._planner_type}] {len(self._trajectory)} WPs  "
                     f"obstacles={len(self._obstacle_positions)}  "
                     f"lane_offset={self._lane_offset:+.2f} m"
                 )
+        else:
+            # road_graph: rolling buffer, replaced (not extended) when low.
+            # Extending would splice a path that restarts near the ego onto
+            # the end of the old one, i.e. a jump backwards in the buffer.
+            self._prune_passed()
+            if len(self._trajectory) < self.get_parameter("replan_threshold").value:
                 centre_line = self._get_centre_line(self._ego_x, self._ego_y, self._ego_yaw)
-                new_wps     = self._dispatch_planner(centre_line)
-                self._trajectory.extend(new_wps)
-                if len(self._trajectory) > max_len:
-                    self._trajectory = self._trajectory[:max_len]
+                max_len = self.get_parameter("max_trajectory_len").value
+                self._trajectory = centre_line[:max_len]
                 self.get_logger().info(
-                    f"[{self._planner_type}] Planned {len(new_wps)} WPs  "
-                    f"buffer={len(self._trajectory)}"
+                    f"[road_graph] Replanned — {len(self._trajectory)} WPs  "
+                    f"obstacles={len(self._obstacle_positions)}  "
+                    f"lane_offset={self._lane_offset:+.2f} m"
                 )
 
+        self._tick += 1
         self._publish_trajectory()
 
     # ── Planner dispatcher ────────────────────────────────────────────────
@@ -327,22 +360,36 @@ class RoadGraphPlanner(Node):
         """
         Route to the selected planner, passing live perception data.
 
-        Both lattice and MPPI planners accept obstacle_positions and
-        already have the obstacle avoidance cost implemented — this is
-        the Phase 3 connection that closes the perception → planning loop.
+        Lattice and MPPI receive the live obstacle list from perception.
         """
+        if not centre_line:
+            return []
         if self._planner_type == "lattice":
             return self._lattice.plan(
                 centre_line        = centre_line,
-                obstacle_positions = self._obstacle_positions,  # ← Phase 3
+                obstacle_positions = self._obstacle_positions,
+                current_offset_m   = self._ego_lateral_offset(centre_line),
             )
-        elif self._planner_type == "mppi":
+        if self._planner_type == "mppi":
+            # Shift the warm start by how far the centre-line's *start* moved
+            # (with route persistence it advances in whole-waypoint steps)
+            advance_wps = 0.0
+            if self._last_plan_xy is not None:
+                moved = math.hypot(centre_line[0][0] - self._last_plan_xy[0],
+                                   centre_line[0][1] - self._last_plan_xy[1])
+                advance_wps = moved / self.get_parameter("wp_step_m").value
+            self._last_plan_xy = (centre_line[0][0], centre_line[0][1])
             return self._mppi.plan(
                 centre_line        = centre_line,
-                obstacle_positions = self._obstacle_positions,  # ← Phase 3
+                obstacle_positions = self._obstacle_positions,
+                advance_wps        = advance_wps,
             )
-        else:
-            return centre_line
+        return centre_line
+
+    def _ego_lateral_offset(self, centre_line) -> float:
+        """Signed lateral offset of the ego from the centre-line (+ = left)."""
+        x0, y0, yaw0 = centre_line[0]
+        return (self._ego_x - x0) * -math.sin(yaw0) + (self._ego_y - y0) * math.cos(yaw0)
 
     # ── Road graph centre-line ────────────────────────────────────────────
 
@@ -352,6 +399,17 @@ class RoadGraphPlanner(Node):
 
         step  = self.get_parameter("wp_step_m").value
         count = self.get_parameter("wp_lookahead_count").value
+
+        # Route persistence: continue along the previous route. Re-projecting
+        # onto the map every tick is ambiguous inside junctions, where lanes of
+        # several connections overlap — the centre-line then flips between
+        # them and the receding-horizon planners produce paths that point
+        # sideways or behind the car (seen in CARLA with the lattice planner).
+        start = self._route_start(ros_x, ros_y, yaw)
+        if start is not None:
+            wps = self._walk_graph(start, step, count)
+            if wps:
+                return wps
 
         carla_loc = carla.Location(x=ros_x, y=-ros_y, z=0.5)
         try:
@@ -374,17 +432,39 @@ class RoadGraphPlanner(Node):
 
     def _walk_graph(self, start_wp, step, count):
         wps, current = [], start_wp
+        route = [start_wp]
         for _ in range(count):
             nexts = current.next(step)
             if not nexts:
                 break
             current = self._choose_next(nexts)
+            route.append(current)
             wps.append((
                 current.transform.location.x,
                 -current.transform.location.y,
                 -math.radians(current.transform.rotation.yaw),
             ))
+        self._route = route
         return wps
+
+    def _route_start(self, ros_x, ros_y, yaw):
+        """
+        Waypoint of the previous route at (or just behind) the ego, or None
+        if there is no route or the ego has left it.
+        """
+        if not self._route:
+            return None
+        max_dev = self.get_parameter("route_max_deviation_m").value
+        pts = [(wp.transform.location.x, -wp.transform.location.y) for wp in self._route]
+        dists = [math.hypot(px - ros_x, py - ros_y) for px, py in pts]
+        i = min(range(len(pts)), key=dists.__getitem__)
+        if dists[i] > max_dev:
+            return None
+        # start from the closest route point that is not ahead of the ego
+        hx, hy = math.cos(yaw), math.sin(yaw)
+        if i > 0 and (pts[i][0] - ros_x) * hx + (pts[i][1] - ros_y) * hy > 0.0:
+            i -= 1
+        return self._route[i]
 
     def _choose_next(self, nexts):
         if len(nexts) == 1 or self._goal is None:
@@ -449,11 +529,11 @@ def main(args=None):
     node = RoadGraphPlanner()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":
