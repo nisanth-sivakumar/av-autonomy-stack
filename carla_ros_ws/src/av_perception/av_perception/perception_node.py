@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-perception_node.py — av_perception package  (Phase 3)
+perception_node.py — av_perception package
 ======================================================
 Provides two perception capabilities:
 
@@ -10,9 +10,10 @@ Provides two perception capabilities:
      publishes obstacle positions in the ROS map frame.
 
   2. Lane detection
-     Processes the semantic segmentation camera image to locate lane
-     markings, computes the lateral offset of the ego vehicle from the
-     lane centre, and publishes it for downstream use.
+     Finds road-line pixels (palette colour) in the semantic segmentation
+     camera image and projects them onto the ground plane using the
+     camera intrinsics and mount height (see lane_detection.py) to get
+     the ego's lateral offset from the lane centre in metres.
 
 Publishes
 ---------
@@ -29,7 +30,8 @@ Publishes
 
 Subscribes
 ----------
-  /carla/ego_vehicle/semantic_segmentation_front/image  (sensor_msgs/Image)
+  /carla/ego_vehicle/semantic_segmentation_front/image        (sensor_msgs/Image)
+  /carla/ego_vehicle/semantic_segmentation_front/camera_info  (sensor_msgs/CameraInfo)
   /carla/ego_vehicle/odometry                           (nav_msgs/Odometry)
 
 Connects to CARLA Python API (read-only) to query actor positions.
@@ -40,21 +42,21 @@ Coordinate conventions
     ros_y = -carla_y
     Obstacle positions published in ROS map frame.
 
-CARLA semantic labels used
---------------------------
-    6 = RoadLine  (lane markings — bright green-yellow in colour palette)
-    7 = Road
+The bridge publishes the semantic image already converted to the
+CityScapes palette, so road lines are detected by colour (157, 234, 50),
+not by label ID.
 """
 
 import math
 import time
 import numpy as np
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseArray, Pose, Point, Quaternion
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import Float32
 
 try:
@@ -70,14 +72,11 @@ try:
 except ImportError:
     CARLA_AVAILABLE = False
 
-
-# ---------------------------------------------------------------------------
-# Semantic segmentation label constants (CARLA 0.9.x)
-# ---------------------------------------------------------------------------
-LABEL_ROAD_LINE = 6
-LABEL_ROAD      = 7
-LABEL_VEHICLE   = 10
-LABEL_PEDESTRIAN = 4
+from av_perception.lane_detection import (
+    CameraModel,
+    road_line_mask,
+    estimate_lane_offset,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -100,10 +99,14 @@ class PerceptionNode(Node):
         self.declare_parameter("position_noise_std_m",  0.4)    # Gaussian noise on position
         self.declare_parameter("detection_rate_hz",     10.0)
 
-        # Lane detection
-        self.declare_parameter("lane_roi_top_frac",     0.55)   # ROI starts at 55% down image
-        self.declare_parameter("pixels_per_meter",      80.0)   # rough calibration — tune per camera
-        self.declare_parameter("min_lane_pixels",       20)     # min pixels to trust detection
+        # Lane detection — camera geometry must match config/objects.json
+        self.declare_parameter("camera_height_m",       2.0)    # mount height above ground
+        self.declare_parameter("camera_pitch_deg",      20.0)   # positive = looking down
+        self.declare_parameter("camera_fov_deg",        90.0)   # used until camera_info arrives
+        self.declare_parameter("lane_max_range_m",      15.0)   # ignore ground farther than this
+        self.declare_parameter("lane_width_m",          3.5)    # assumed when one marking visible
+        self.declare_parameter("lane_min_rows",         3)      # rows needed to trust an estimate
+        self.declare_parameter("lane_hold_time_s",      1.0)    # hold last estimate this long
         self.declare_parameter("publish_debug_image",   True)
 
         # ── State ─────────────────────────────────────────────────────────
@@ -116,7 +119,9 @@ class PerceptionNode(Node):
         self._obstacles:     list[tuple[float, float]] = []
 
         self._cv_bridge = CvBridge() if CV_AVAILABLE else None
-        self._last_lane_offset: float = 0.0
+        self._last_lane_offset: float | None = None
+        self._last_lane_stamp: float = 0.0
+        self._camera_info: CameraInfo | None = None
 
         # ── CARLA connection ──────────────────────────────────────────────
         self._connect_to_carla()
@@ -149,6 +154,12 @@ class PerceptionNode(Node):
             Image,
             "/carla/ego_vehicle/semantic_segmentation_front/image",
             self._semantic_image_cb,
+            sensor_qos,
+        )
+        self.create_subscription(
+            CameraInfo,
+            "/carla/ego_vehicle/semantic_segmentation_front/camera_info",
+            self._camera_info_cb,
             sensor_qos,
         )
 
@@ -266,154 +277,82 @@ class PerceptionNode(Node):
 
     # ── Lane detection (semantic segmentation) ────────────────────────────
 
+    def _camera_info_cb(self, msg: CameraInfo):
+        self._camera_info = msg
+
+    def _camera_model(self, width: int, height: int) -> CameraModel:
+        cam_h = self.get_parameter("camera_height_m").value
+        pitch = self.get_parameter("camera_pitch_deg").value
+        info = self._camera_info
+        if info is not None and info.width == width and info.k[0] > 0.0:
+            return CameraModel(fx=info.k[0], cx=info.k[2], cy=info.k[5], height_m=cam_h,
+                               pitch_rad=math.radians(pitch))
+        return CameraModel.from_fov(
+            width, height, self.get_parameter("camera_fov_deg").value, cam_h, pitch)
+
     def _semantic_image_cb(self, msg: Image):
         """
-        Process the semantic segmentation camera image to detect lane markings
-        and compute the lateral offset of the ego vehicle from lane centre.
+        Estimate the lateral offset from the lane centre and publish it.
 
-        Method
-        ------
-        1. Convert ROS Image → NumPy array via cv_bridge.
-        2. Extract the R channel, which in CARLA's semantic seg output contains
-           the semantic label ID (0-22).
-        3. Create a road-line mask (label == 6) within the bottom ROI.
-        4. Find left and right lane marking pixel columns.
-        5. Compute lane centre and offset from image centre.
-        6. Convert pixel offset → metres using pixels_per_meter calibration.
-        7. Publish lane offset and annotated debug image.
-
-        Coordinate sign convention
-        --------------------------
-        Positive lane_offset = ego is LEFT of lane centre → planner should
-        bias trajectory slightly right.
+        Publishes /perception/lane_offset only while an estimate is
+        available (fresh, or held for `lane_hold_time_s`), so consumers can
+        tell "no detection" from "centred".
+        Positive = ego LEFT of lane centre.
         """
         if not CV_AVAILABLE:
             return
-
         try:
-            # Convert to BGR numpy array, then to RGB
             bgr = self._cv_bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         except Exception as exc:
             self.get_logger().warn(f"cv_bridge conversion failed: {exc}")
             return
-
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         h, w = rgb.shape[:2]
-        roi_top     = int(h * self.get_parameter("lane_roi_top_frac").value)
-        min_pixels  = self.get_parameter("min_lane_pixels").value
-        ppm         = self.get_parameter("pixels_per_meter").value
 
-        # ── Extract semantic labels ───────────────────────────────────────
-        # CARLA semantic seg: R channel = semantic label ID.
-        # This works with both raw label output and carla_ros_bridge encoding.
-        labels = rgb[:, :, 0]   # R channel contains the semantic label
-
-        # ROI: bottom portion of image (close to vehicle, most reliable)
-        roi_labels  = labels[roi_top:, :]
-        roi_rgb     = rgb[roi_top:, :].copy()
-
-        # ── Road line mask ────────────────────────────────────────────────
-        lane_mask = (roi_labels == LABEL_ROAD_LINE).astype(np.uint8) * 255
-
-        # Fallback: if label approach finds nothing, try colour matching.
-        # CARLA colours road lines as (157, 234, 50) in its palette.
-        if cv2.countNonZero(lane_mask) < min_pixels:
-            lower = np.array([140, 220, 35], dtype=np.uint8)
-            upper = np.array([175, 245, 65], dtype=np.uint8)
-            lane_mask = cv2.inRange(roi_rgb, lower, upper)
-
-        # ── Compute lane offset ───────────────────────────────────────────
-        center_x    = w // 2
-        lane_offset = None
-
-        if cv2.countNonZero(lane_mask) >= min_pixels:
-            ys, xs = np.where(lane_mask > 0)
-            left_xs  = xs[xs < center_x]
-            right_xs = xs[xs > center_x]
-
-            if len(left_xs) >= min_pixels // 2 and len(right_xs) >= min_pixels // 2:
-                # Both lane markings visible — use midpoint
-                left_mean  = float(np.mean(left_xs))
-                right_mean = float(np.mean(right_xs))
-                lane_center_x = (left_mean + right_mean) / 2.0
-                offset_px   = center_x - lane_center_x   # + = ego left of centre
-                lane_offset = offset_px / ppm
-
-            elif len(left_xs) >= min_pixels // 2:
-                # Only left lane visible — estimate from left marking
-                # Assume standard lane width ~3.75 m, so right marking is ~1.875m right
-                left_mean   = float(np.mean(left_xs))
-                half_lane_px = 1.875 * ppm
-                lane_center_x = left_mean + half_lane_px
-                offset_px   = center_x - lane_center_x
-                lane_offset = offset_px / ppm
-
-            elif len(right_xs) >= min_pixels // 2:
-                # Only right lane visible — estimate from right marking
-                right_mean  = float(np.mean(right_xs))
-                half_lane_px = 1.875 * ppm
-                lane_center_x = right_mean - half_lane_px
-                offset_px   = center_x - lane_center_x
-                lane_offset = offset_px / ppm
-
-        # Clamp and publish
-        if lane_offset is not None:
-            lane_offset = float(np.clip(lane_offset, -2.5, 2.5))
-            self._last_lane_offset = lane_offset
-        # else: keep last known offset (handles momentary detection failures)
-
-        offset_msg = Float32()
-        offset_msg.data = self._last_lane_offset
-        self._lane_offset_pub.publish(offset_msg)
-
-        self.get_logger().debug(
-            f"[lane] offset={self._last_lane_offset:+.3f} m  "
-            f"lane_pixels={cv2.countNonZero(lane_mask)}"
+        cam = self._camera_model(w, h)
+        mask = road_line_mask(rgb)
+        est = estimate_lane_offset(
+            mask, cam,
+            max_range_m=self.get_parameter("lane_max_range_m").value,
+            lane_width_m=self.get_parameter("lane_width_m").value,
+            min_rows=self.get_parameter("lane_min_rows").value,
         )
 
-        # ── Debug image ───────────────────────────────────────────────────
+        now = time.monotonic()
+        if est.offset_m is not None:
+            self._last_lane_offset = float(np.clip(est.offset_m, -2.5, 2.5))
+            self._last_lane_stamp = now
+        elif now - self._last_lane_stamp > self.get_parameter("lane_hold_time_s").value:
+            self._last_lane_offset = None
+
+        if self._last_lane_offset is not None:
+            self._lane_offset_pub.publish(Float32(data=self._last_lane_offset))
+
+        self.get_logger().debug(
+            f"[lane] offset={est.offset_m}  rows={est.rows_used}  width={est.lane_width_m}"
+        )
+
         if self.get_parameter("publish_debug_image").value:
-            self._publish_debug_image(rgb, roi_top, lane_mask, lane_offset)
+            self._publish_debug_image(rgb, mask, cam, est, msg.header)
 
-    def _publish_debug_image(
-        self,
-        rgb:        np.ndarray,
-        roi_top:    int,
-        lane_mask:  np.ndarray,
-        lane_offset: float | None,
-    ):
-        """Overlay lane mask and centre-line marker on image for debugging."""
+    def _publish_debug_image(self, rgb, mask, cam: CameraModel, est, header):
+        """Draw the road-line mask (green), used marking pixels (red/blue) and horizon."""
         debug = rgb.copy()
-        h, w  = debug.shape[:2]
-
-        # Overlay lane mask in green on the ROI
-        lane_overlay       = debug[roi_top:].copy()
-        mask_bool          = lane_mask > 0
-        lane_overlay[mask_bool, 0] = 0
-        lane_overlay[mask_bool, 1] = 255
-        lane_overlay[mask_bool, 2] = 0
-        debug[roi_top:]    = cv2.addWeighted(debug[roi_top:], 0.6, lane_overlay, 0.4, 0)
-
-        # Draw image centre line
-        cv2.line(debug, (w // 2, roi_top), (w // 2, h), (255, 255, 0), 1)
-
-        # Draw computed lane centre
-        if lane_offset is not None:
-            ppm = self.get_parameter("pixels_per_meter").value
-            lane_cx = int(w // 2 - lane_offset * ppm)
-            cv2.line(debug, (lane_cx, roi_top), (lane_cx, h), (0, 255, 255), 2)
-
-        # Annotate offset value
-        text  = f"Lane offset: {self._last_lane_offset:+.2f} m"
-        color = (0, 200, 0) if abs(self._last_lane_offset) < 0.5 else (0, 0, 255)
-        cv2.putText(debug, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-
-        # Convert back to ROS Image and publish
+        debug[mask] = (0, 255, 0)
+        for (v, u) in est.left_px:
+            cv2.circle(debug, (u, v), 1, (255, 0, 0), -1)
+        for (v, u) in est.right_px:
+            cv2.circle(debug, (u, v), 1, (0, 0, 255), -1)
+        h, w = debug.shape[:2]
+        horizon = int(cam.cy - cam.fx * math.tan(cam.pitch_rad))
+        cv2.line(debug, (0, horizon), (w, horizon), (255, 255, 0), 1)
+        cv2.line(debug, (int(cam.cx), max(horizon, 0)), (int(cam.cx), h), (255, 255, 0), 1)
+        text = "lane: none" if est.offset_m is None else f"lane offset {est.offset_m:+.2f} m"
+        cv2.putText(debug, text, (5, 12), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
         try:
-            debug_bgr = cv2.cvtColor(debug, cv2.COLOR_RGB2BGR)
-            img_msg   = self._cv_bridge.cv2_to_imgmsg(debug_bgr, encoding="bgr8")
-            img_msg.header.stamp    = self.get_clock().now().to_msg()
-            img_msg.header.frame_id = "ego_vehicle"
+            img_msg = self._cv_bridge.cv2_to_imgmsg(
+                cv2.cvtColor(debug, cv2.COLOR_RGB2BGR), encoding="bgr8")
+            img_msg.header = header
             self._debug_img_pub.publish(img_msg)
         except Exception as exc:
             self.get_logger().warn(f"Debug image publish failed: {exc}")
@@ -428,11 +367,11 @@ def main(args=None):
     node = PerceptionNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

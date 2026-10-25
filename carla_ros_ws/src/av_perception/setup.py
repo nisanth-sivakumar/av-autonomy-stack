@@ -16,6 +16,7 @@ setup(
             glob('launch/*.py')),
     ],
     install_requires=['setuptools'],
+    extras_require={'test': ['pytest']},
     zip_safe=True,
     entry_points={
         'console_scripts': [
