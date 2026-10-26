@@ -2,43 +2,60 @@
 """
 scripts/analyze_run.py
 -----------------------
-Parses a ROS2 bag from a Pure Pursuit run and produces:
-  1. A CSV of timestamped ego state + control signals
-  2. Cross-track error vs time
-  3. Speed vs time
-  4. Trajectory plot (driven path vs reference waypoints)
-  5. A summary table of key metrics
+Parses a ROS2 bag recorded by reset_run.sh and produces:
+  1. run_data.csv   — timestamped ego state, control, CTE, perception
+  2. metrics.txt    — summary metrics
+  3. run_plots.png  — driven vs planned path, speed, CTE + perceived lane
+                      offset, steering, throttle/brake, obstacle distance
+
+Cross-track error is measured against the *planned trajectory* that was
+active at each instant (/planning/trajectory), not against the driven path.
+Bags without that topic (pre-planner runs) get no CTE.
 
 Usage
 -----
-    python3 scripts/analyze_run.py bags/run_20240428_120000
+    python3 scripts/analyze_run.py bags/run_mppi_20260509_032717
+    python3 scripts/analyze_run.py bags/<run> -o out_dir --no-show
 
 Requirements
 ------------
-    pip install rosbags matplotlib pandas numpy
-
-    rosbags is the pure-Python ROS2 bag reader — no ROS installation needed.
-    Install it in WSL:
-        pip3 install rosbags --break-system-packages
+    pip3 install --user rosbags matplotlib pandas "numpy<2"
+    (rosbags is a pure-Python bag reader — no ROS installation needed.)
 """
 
-import sys
-import math
 import argparse
+import math
+import os
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
+import matplotlib
+if not os.environ.get("DISPLAY"):
+    matplotlib.use("Agg")
+import matplotlib.pyplot as plt          # noqa: E402
+import matplotlib.gridspec as gridspec   # noqa: E402
 
 try:
     from rosbags.rosbag2 import Reader
-    from rosbags.typesys import Stores, get_typestore
+    from rosbags.typesys import Stores, get_typestore, get_types_from_msg
 except ImportError:
     print("ERROR: rosbags not installed.")
-    print("  pip3 install rosbags --break-system-packages")
+    print("  pip3 install --user rosbags")
     sys.exit(1)
+
+REPO = Path(__file__).resolve().parent.parent
+CARLA_MSGS_DIR = REPO / "carla_ros_ws/src/ros-bridge/carla_msgs/msg"
+
+ODOM_TOPIC = "/carla/ego_vehicle/odometry"
+CONTROL_TOPIC = "/carla/ego_vehicle/vehicle_control_cmd"
+SPEED_TOPIC = "/carla/ego_vehicle/speedometer"
+COLLISION_TOPIC = "/carla/ego_vehicle/collision"
+LANE_INV_TOPIC = "/carla/ego_vehicle/lane_invasion"
+TRAJ_TOPIC = "/planning/trajectory"
+OBST_TOPIC = "/perception/obstacles"
+LANE_OFF_TOPIC = "/perception/lane_offset"
 
 
 # ---------------------------------------------------------------------------
@@ -46,305 +63,299 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 def quat_to_yaw(x, y, z, w) -> float:
-    siny_cosp = 2.0 * (w * z + x * y)
-    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-    return math.atan2(siny_cosp, cosy_cosp)
+    return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
 
 
-def cross_track_error(px, py, waypoints):
+def signed_cte(px, py, path_xy: np.ndarray) -> float:
     """
-    Compute the minimum distance from point (px, py) to the nearest
-    segment of the reference path defined by waypoints.
-    Returns a signed CTE: positive = left of path, negative = right.
+    Signed distance from (px, py) to a polyline (+ = left of path).
+
+    The first segment is extended 20 m backwards: planned paths start a
+    few metres ahead of the vehicle, and without the extension the
+    closest point would be the path's first point, mixing longitudinal
+    distance into the CTE.
     """
-    if len(waypoints) < 2:
-        return 0.0
-
-    min_dist = float('inf')
-    sign = 1.0
-
-    for i in range(len(waypoints) - 1):
-        ax, ay = waypoints[i]
-        bx, by = waypoints[i + 1]
-
-        abx, aby = bx - ax, by - ay
-        apx, apy = px - ax, py - ay
-
-        ab_len_sq = abx ** 2 + aby ** 2
-        if ab_len_sq < 1e-9:
-            continue
-
-        t = max(0.0, min(1.0, (apx * abx + apy * aby) / ab_len_sq))
-        closest_x = ax + t * abx
-        closest_y = ay + t * aby
-
-        dist = math.hypot(px - closest_x, py - closest_y)
-        if dist < min_dist:
-            min_dist = dist
-            # Sign: cross product of AB and AP
-            cross = abx * apy - aby * apx
-            sign = 1.0 if cross >= 0 else -1.0
-
-    return sign * min_dist
+    if len(path_xy) < 2:
+        return float("nan")
+    d0 = path_xy[1] - path_xy[0]
+    n0 = np.linalg.norm(d0)
+    if n0 < 1e-9:
+        return float("nan")
+    pts = np.vstack([path_xy[0] - d0 / n0 * 20.0, path_xy])
+    a, b = pts[:-1], pts[1:]
+    ab = b - a
+    ab_len2 = np.maximum((ab ** 2).sum(axis=1), 1e-12)
+    p = np.array([px, py])
+    t = np.clip(((p - a) * ab).sum(axis=1) / ab_len2, 0.0, 1.0)
+    closest = a + t[:, None] * ab
+    dist = np.linalg.norm(p - closest, axis=1)
+    i = int(np.argmin(dist))
+    cross = ab[i, 0] * (py - a[i, 1]) - ab[i, 1] * (px - a[i, 0])
+    return float(math.copysign(dist[i], cross))
 
 
-def compute_jerk(throttle_series, steer_series, timestamps):
-    """
-    Jerk proxy: RMS of the first derivative of steering angle.
-    Lower = smoother driving.
-    """
+def compute_jerk(steer_series, timestamps):
+    """RMS of the steering-command rate (1/s). Lower = smoother."""
     if len(steer_series) < 2:
         return 0.0
-    dt = np.diff(timestamps)
-    dt = np.where(dt < 1e-6, 1e-6, dt)
-    dsteer = np.diff(steer_series) / dt
-    return float(np.sqrt(np.mean(dsteer ** 2)))
+    dt = np.maximum(np.diff(timestamps), 1e-6)
+    return float(np.sqrt(np.mean((np.diff(steer_series) / dt) ** 2)))
+
+
+def count_events(times, gap_s=1.0):
+    """Number of distinct events: messages separated by more than gap_s."""
+    if not times:
+        return 0
+    t = np.sort(np.asarray(times))
+    return int(1 + np.sum(np.diff(t) > gap_s))
+
+
+def make_typestore():
+    typestore = get_typestore(Stores.ROS2_HUMBLE)
+    if CARLA_MSGS_DIR.is_dir():
+        types = {}
+        for f in sorted(CARLA_MSGS_DIR.glob("*.msg")):
+            types.update(get_types_from_msg(f.read_text(), f"carla_msgs/msg/{f.stem}"))
+        typestore.register(types)
+    else:
+        print(f"  WARNING: {CARLA_MSGS_DIR} not found — carla_msgs topics unreadable")
+    return typestore
 
 
 # ---------------------------------------------------------------------------
 # Bag reading
 # ---------------------------------------------------------------------------
 
-def read_bag(bag_path: Path):
-    """
-    Read odometry, control commands, and speedometer from a ROS2 bag.
-    Returns three lists of dicts, one per topic.
-    """
-    typestore = get_typestore(Stores.ROS2_HUMBLE)
-
-    odom_rows    = []
-    control_rows = []
-    speed_rows   = []
-
-    ODOM_TOPIC    = '/carla/ego_vehicle/odometry'
-    CONTROL_TOPIC = '/carla/ego_vehicle/vehicle_control_cmd'
-    SPEED_TOPIC   = '/carla/ego_vehicle/speedometer'
-
+def read_bag(bag_path: Path) -> dict:
+    typestore = make_typestore()
+    data = {k: [] for k in ("odom", "control", "speed", "traj", "obst", "lane",
+                            "collision", "lane_inv")}
     print(f"Reading bag: {bag_path}")
 
     with Reader(bag_path) as reader:
-        connections = {c.topic: c for c in reader.connections}
-
-        for topic in [ODOM_TOPIC, CONTROL_TOPIC, SPEED_TOPIC]:
-            if topic not in connections:
+        topics = {c.topic for c in reader.connections}
+        for topic in (ODOM_TOPIC, CONTROL_TOPIC, TRAJ_TOPIC):
+            if topic not in topics:
                 print(f"  WARNING: topic {topic} not found in bag")
 
-        for conn, timestamp, rawdata in reader.messages():
-            t_sec = timestamp * 1e-9   # nanoseconds → seconds
+        for conn, timestamp, raw in reader.messages():
+            t = timestamp * 1e-9
+            topic = conn.topic
+            if topic not in (ODOM_TOPIC, CONTROL_TOPIC, SPEED_TOPIC, TRAJ_TOPIC, OBST_TOPIC,
+                             LANE_OFF_TOPIC, COLLISION_TOPIC, LANE_INV_TOPIC):
+                continue
+            try:
+                msg = typestore.deserialize_cdr(raw, conn.msgtype)
+            except Exception as exc:   # unknown type etc.
+                print(f"  WARNING: cannot decode {topic} ({conn.msgtype}): {exc}")
+                topics.discard(topic)
+                continue
 
-            if conn.topic == ODOM_TOPIC:
-                msg = typestore.deserialize_cdr(rawdata, conn.msgtype)
-                p   = msg.pose.pose.position
-                q   = msg.pose.pose.orientation
-                v   = msg.twist.twist.linear
-                yaw = quat_to_yaw(q.x, q.y, q.z, q.w)
-                speed = math.hypot(v.x, v.y)
-                odom_rows.append({
-                    't': t_sec, 'x': p.x, 'y': p.y,
-                    'yaw_deg': math.degrees(yaw), 'speed': speed,
+            if topic == ODOM_TOPIC:
+                p, q, v = msg.pose.pose.position, msg.pose.pose.orientation, msg.twist.twist.linear
+                data["odom"].append({
+                    "t": t, "x": p.x, "y": p.y,
+                    "yaw_deg": math.degrees(quat_to_yaw(q.x, q.y, q.z, q.w)),
+                    "speed": math.hypot(v.x, v.y),
                 })
+            elif topic == CONTROL_TOPIC:
+                data["control"].append({"t": t, "throttle": msg.throttle,
+                                        "steer": msg.steer, "brake": msg.brake})
+            elif topic == SPEED_TOPIC:
+                data["speed"].append({"t": t, "speed_sensor": msg.data})   # std_msgs/Float32
+            elif topic == TRAJ_TOPIC:
+                xy = np.array([[ps.pose.position.x, ps.pose.position.y] for ps in msg.poses])
+                data["traj"].append((t, xy.reshape(-1, 2)))
+            elif topic == OBST_TOPIC:
+                data["obst"].append((t, [(p.position.x, p.position.y) for p in msg.poses]))
+            elif topic == LANE_OFF_TOPIC:
+                data["lane"].append({"t": t, "lane_offset": msg.data})
+            elif topic == COLLISION_TOPIC:
+                data["collision"].append(t)
+            elif topic == LANE_INV_TOPIC:
+                data["lane_inv"].append(t)
 
-            elif conn.topic == CONTROL_TOPIC:
-                msg = typestore.deserialize_cdr(rawdata, conn.msgtype)
-                control_rows.append({
-                    't': t_sec,
-                    'throttle': msg.throttle,
-                    'steer': msg.steer,
-                    'brake': msg.brake,
-                })
-
-            elif conn.topic == SPEED_TOPIC:
-                msg = typestore.deserialize_cdr(rawdata, conn.msgtype)
-                speed_rows.append({'t': t_sec, 'speed_sensor': msg.speed})
-
-    print(f"  Odometry msgs    : {len(odom_rows)}")
-    print(f"  Control msgs     : {len(control_rows)}")
-    print(f"  Speedometer msgs : {len(speed_rows)}")
-
-    return odom_rows, control_rows, speed_rows
+    for k in ("odom", "control", "speed", "traj", "obst", "lane", "collision", "lane_inv"):
+        print(f"  {k:<10}: {len(data[k])} msgs")
+    return data
 
 
 # ---------------------------------------------------------------------------
-# Main analysis
+# Analysis
 # ---------------------------------------------------------------------------
 
-def analyze(bag_path: Path, output_dir: Path):
+def analyze(bag_path: Path, output_dir: Path, show: bool):
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    odom_rows, control_rows, speed_rows = read_bag(bag_path)
-
-    if not odom_rows:
-        print("ERROR: No odometry data in bag. Was the car moving?")
+    data = read_bag(bag_path)
+    if not data["odom"]:
+        print("ERROR: No odometry data in bag. Was the bridge running?")
         sys.exit(1)
 
-    odom_df    = pd.DataFrame(odom_rows).sort_values('t').reset_index(drop=True)
-    control_df = pd.DataFrame(control_rows).sort_values('t').reset_index(drop=True)
+    odom = pd.DataFrame(data["odom"]).sort_values("t")
+    # CARLA briefly reports the ego at (0, 0) while spawning — drop it
+    odom = odom[~((odom["x"].abs() < 0.1) & (odom["y"].abs() < 0.1))].reset_index(drop=True)
+    t0 = odom["t"].iloc[0]
 
-    # Normalise timestamps to start at 0
-    t0 = odom_df['t'].iloc[0]
-    odom_df['t']    -= t0
-    control_df['t'] -= t0
+    # Odometry that teleports back and forth means two actors with
+    # role_name "ego_vehicle" exist (a previous run's ego was not destroyed).
+    step = np.hypot(np.diff(odom["x"]), np.diff(odom["y"]))
+    dt = np.maximum(np.diff(odom["t"]), 1e-3)
+    jumps = int(np.sum(step > 1.0 + 3.0 * odom["speed"].to_numpy()[1:] * dt))
+    if jumps > 5:
+        print(f"\n  WARNING: {jumps} odometry jumps — more than one 'ego_vehicle' was publishing.\n"
+              "  Metrics below mix both vehicles. Restart CARLA or destroy the stale actor.\n")
 
-    # ---- Merge control onto odom timeline via nearest-timestamp join ------
-    merged = pd.merge_asof(
-        odom_df.sort_values('t'),
-        control_df.sort_values('t'),
-        on='t', direction='nearest'
-    )
+    # ── CTE vs the planned trajectory active at each odom sample ──────────
+    cte = np.full(len(odom), np.nan)
+    if data["traj"]:
+        traj_t = np.array([t for t, _ in data["traj"]])
+        for i, row in enumerate(odom.itertuples()):
+            j = int(np.searchsorted(traj_t, row.t, side="right")) - 1
+            if j >= 0 and len(data["traj"][j][1]) >= 2:
+                cte[i] = signed_cte(row.x, row.y, data["traj"][j][1])
+    odom["cte"] = cte
 
-    # ---- Reference path: the driven trajectory itself (smoothed) ----------
-    # In Phase 2 you'll replace this with the planner's output path.
-    # For now, downsample the driven path to use as the "reference".
-    waypoints = list(zip(odom_df['x'].values[::5], odom_df['y'].values[::5]))
+    # ── Nearest perceived obstacle at each odom sample ────────────────────
+    obs_dist = np.full(len(odom), np.nan)
+    if data["obst"]:
+        obs_t = np.array([t for t, _ in data["obst"]])
+        for i, row in enumerate(odom.itertuples()):
+            j = int(np.searchsorted(obs_t, row.t, side="right")) - 1
+            if j >= 0 and data["obst"][j][1]:
+                obs_dist[i] = min(math.hypot(ox - row.x, oy - row.y) for ox, oy in data["obst"][j][1])
+    odom["nearest_obstacle"] = obs_dist
 
-    # ---- Compute cross-track error ----------------------------------------
-    print("Computing cross-track error…")
-    cte_values = [
-        cross_track_error(row.x, row.y, waypoints)
-        for row in odom_df.itertuples()
-    ]
-    odom_df['cte'] = cte_values
+    # ── Merge everything on the odom timeline ─────────────────────────────
+    merged = odom.copy()
+    for key in ("control", "speed", "lane"):
+        if data[key]:
+            df = pd.DataFrame(data[key]).sort_values("t")
+            merged = pd.merge_asof(merged, df, on="t", direction="nearest", tolerance=0.5)
+    for col in ("throttle", "steer", "brake", "lane_offset"):
+        if col not in merged:
+            merged[col] = np.nan
+    merged["t"] -= t0
+    odom["t"] -= t0
 
-    # ---- Save CSV ----------------------------------------------------------
-    csv_path = output_dir / 'run_data.csv'
+    csv_path = output_dir / "run_data.csv"
     merged.to_csv(csv_path, index=False)
     print(f"CSV saved → {csv_path}")
 
-    # ---- Metrics summary --------------------------------------------------
-    run_duration  = odom_df['t'].iloc[-1]
-    total_dist    = sum(
-        math.hypot(
-            odom_df['x'].iloc[i] - odom_df['x'].iloc[i-1],
-            odom_df['y'].iloc[i] - odom_df['y'].iloc[i-1]
-        )
-        for i in range(1, len(odom_df))
-    )
-    mean_speed    = odom_df['speed'].mean()
-    max_speed     = odom_df['speed'].max()
-    mean_cte      = odom_df['cte'].abs().mean()
-    max_cte       = odom_df['cte'].abs().max()
-    steering_jerk = compute_jerk(
-        merged['throttle'].values,
-        merged['steer'].values,
-        merged['t'].values
-    )
-    brake_time    = (merged['brake'] > 0.1).sum() / len(merged) * 100
+    # ── Metrics ───────────────────────────────────────────────────────────
+    total_dist = float(np.sum(np.hypot(np.diff(odom["x"]), np.diff(odom["y"]))))
+    ctl = merged.dropna(subset=["steer"])
+    abs_cte = np.abs(odom["cte"].dropna())
+    lane = merged["lane_offset"].dropna()
+
+    def fmt(v, spec=".3f", unit=""):
+        return "n/a" if v is None or (isinstance(v, float) and math.isnan(v)) else f"{v:{spec}}{unit}"
 
     metrics = {
-        'Run duration (s)':       f"{run_duration:.1f}",
-        'Distance driven (m)':    f"{total_dist:.1f}",
-        'Mean speed (m/s)':       f"{mean_speed:.2f}",
-        'Max speed (m/s)':        f"{max_speed:.2f}",
-        'Mean |CTE| (m)':         f"{mean_cte:.3f}",
-        'Max |CTE| (m)':          f"{max_cte:.3f}",
-        'Steering jerk (RMS)':    f"{steering_jerk:.4f}",
-        'Braking time (%)':       f"{brake_time:.1f}",
+        "Odometry jumps (multi-ego)":    str(jumps),
+        "Run duration (s)":              fmt(float(odom["t"].iloc[-1]), ".1f"),
+        "Distance driven (m)":           fmt(total_dist, ".1f"),
+        "Mean speed (m/s)":              fmt(float(odom["speed"].mean()), ".2f"),
+        "Max speed (m/s)":               fmt(float(odom["speed"].max()), ".2f"),
+        "Mean |CTE| vs plan (m)":        fmt(float(abs_cte.mean()) if len(abs_cte) else None),
+        "Max |CTE| vs plan (m)":         fmt(float(abs_cte.max()) if len(abs_cte) else None),
+        "Steering rate RMS (1/s)":       fmt(compute_jerk(ctl["steer"].values, ctl["t"].values), ".4f"),
+        "Braking time (%)":              fmt(float((ctl["brake"] > 0.1).mean() * 100) if len(ctl) else None, ".1f"),
+        "Collisions (events)":           str(count_events(data["collision"])),
+        "Lane invasions (events)":       str(count_events(data["lane_inv"])),
+        "Min perceived obstacle (m)":    fmt(float(np.nanmin(obs_dist)) if np.isfinite(obs_dist).any() else None, ".2f"),
+        "Mean |lane offset| (m)":        fmt(float(lane.abs().mean()) if len(lane) else None),
+        # share of odom samples with a lane-offset message within 0.5 s
+        "Lane offset availability (%)":  fmt(float(merged["lane_offset"].notna().mean() * 100)
+                                             if data["lane"] else None, ".0f"),
     }
 
-    print("\n" + "=" * 42)
-    print("  RUN METRICS SUMMARY")
-    print("=" * 42)
-    for k, v in metrics.items():
-        print(f"  {k:<28} {v}")
-    print("=" * 42 + "\n")
-
-    metrics_path = output_dir / 'metrics.txt'
-    with open(metrics_path, 'w') as f:
-        f.write("RUN METRICS SUMMARY\n")
-        f.write("=" * 42 + "\n")
-        for k, v in metrics.items():
-            f.write(f"  {k:<28} {v}\n")
-        f.write("=" * 42 + "\n")
+    lines = ["RUN METRICS SUMMARY", "=" * 46]
+    lines += [f"  {k:<30} {v}" for k, v in metrics.items()]
+    lines += ["=" * 46]
+    print("\n" + "\n".join(lines) + "\n")
+    metrics_path = output_dir / "metrics.txt"
+    metrics_path.write_text("\n".join(lines) + "\n")
     print(f"Metrics saved → {metrics_path}")
 
-    # ---- Plots ------------------------------------------------------------
-    fig = plt.figure(figsize=(16, 10))
-    fig.suptitle(f"Run Analysis — {bag_path.name}", fontsize=13, fontweight='bold')
-    gs  = gridspec.GridSpec(2, 3, figure=fig, hspace=0.4, wspace=0.35)
+    # ── Plots ─────────────────────────────────────────────────────────────
+    # numpy arrays: the system matplotlib cannot index newer pandas Series
+    O = {c: odom[c].to_numpy(dtype=float) for c in odom.columns}
+    M = {c: merged[c].to_numpy(dtype=float) for c in merged.columns}
+    fig = plt.figure(figsize=(18, 10))
+    fig.suptitle(f"Run Analysis — {bag_path.name}", fontsize=13, fontweight="bold")
+    gs = gridspec.GridSpec(2, 4, figure=fig, hspace=0.4, wspace=0.35)
 
-    # 1. Trajectory
-    ax1 = fig.add_subplot(gs[:, 0])
-    ax1.plot(odom_df['x'], odom_df['y'], linewidth=1.5, color='royalblue', label='Driven path')
-    ax1.plot(odom_df['x'].iloc[0],  odom_df['y'].iloc[0],  'go', markersize=8, label='Start')
-    ax1.plot(odom_df['x'].iloc[-1], odom_df['y'].iloc[-1], 'rs', markersize=8, label='End')
-    ax1.set_xlabel('X (m)')
-    ax1.set_ylabel('Y (m)')
-    ax1.set_title('Trajectory')
-    ax1.legend(fontsize=8)
-    ax1.set_aspect('equal')
-    ax1.grid(True, alpha=0.3)
+    ax = fig.add_subplot(gs[:, 0])
+    ax.plot(O["x"], O["y"], lw=1.5, color="royalblue", label="Driven path")
+    if data["traj"]:
+        for _, xy in data["traj"][:: max(1, len(data["traj"]) // 15)]:
+            if len(xy):
+                ax.plot(xy[:, 0], xy[:, 1], lw=0.6, color="gray", alpha=0.4)
+        ax.plot([], [], lw=0.6, color="gray", label="Planned (sampled)")
+    obs_pts = [p for _, ps in data["obst"] for p in ps]
+    if obs_pts:
+        op = np.asarray(obs_pts)
+        ax.scatter(op[:, 0], op[:, 1], s=2, color="red", alpha=0.2, label="Perceived obstacles")
+    ax.plot(O["x"][0], O["y"][0], "go", ms=8, label="Start")
+    ax.plot(O["x"][-1], O["y"][-1], "rs", ms=8, label="End")
+    ax.set(xlabel="X (m)", ylabel="Y (m)", title="Trajectory")
+    ax.legend(fontsize=8)
+    ax.set_aspect("equal")
+    ax.grid(True, alpha=0.3)
 
-    # 2. Speed vs time
-    ax2 = fig.add_subplot(gs[0, 1])
-    ax2.plot(odom_df['t'], odom_df['speed'], color='darkorange', linewidth=1.2)
-    ax2.axhline(y=merged['throttle'].mean() * 5, color='gray',
-                linestyle='--', alpha=0.5, label='Target (approx)')
-    ax2.set_xlabel('Time (s)')
-    ax2.set_ylabel('Speed (m/s)')
-    ax2.set_title('Speed over Time')
-    ax2.grid(True, alpha=0.3)
+    ax = fig.add_subplot(gs[0, 1])
+    ax.plot(O["t"], O["speed"], color="darkorange", lw=1.2)
+    ax.set(xlabel="Time (s)", ylabel="Speed (m/s)", title="Speed")
+    ax.grid(True, alpha=0.3)
 
-    # 3. Cross-track error vs time
-    ax3 = fig.add_subplot(gs[0, 2])
-    ax3.plot(odom_df['t'], odom_df['cte'], color='crimson', linewidth=1.2)
-    ax3.axhline(y=0, color='black', linestyle='--', linewidth=0.8)
-    ax3.fill_between(odom_df['t'], odom_df['cte'], alpha=0.15, color='crimson')
-    ax3.set_xlabel('Time (s)')
-    ax3.set_ylabel('CTE (m)')
-    ax3.set_title('Cross-Track Error')
-    ax3.grid(True, alpha=0.3)
+    ax = fig.add_subplot(gs[0, 2])
+    ax.plot(O["t"], O["cte"], color="crimson", lw=1.2, label="CTE vs plan (+ left)")
+    if len(lane):
+        ax.plot(M["t"], M["lane_offset"], color="teal", lw=1.0, alpha=0.8,
+                label="Perceived lane offset (+ left)")
+    ax.axhline(0, color="black", ls="--", lw=0.8)
+    ax.set(xlabel="Time (s)", ylabel="m", title="Lateral error")
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
 
-    # 4. Steering vs time
-    ax4 = fig.add_subplot(gs[1, 1])
-    ax4.plot(merged['t'], merged['steer'], color='purple', linewidth=1.2)
-    ax4.axhline(y=0, color='black', linestyle='--', linewidth=0.8)
-    ax4.set_xlabel('Time (s)')
-    ax4.set_ylabel('Steer [-1, 1]')
-    ax4.set_title('Steering Command')
-    ax4.grid(True, alpha=0.3)
+    ax = fig.add_subplot(gs[0, 3])
+    ax.plot(O["t"], O["nearest_obstacle"], color="red", lw=1.0)
+    for tc in data["collision"]:
+        ax.axvline(tc - t0, color="black", lw=0.5, alpha=0.3)
+    ax.set(xlabel="Time (s)", ylabel="m", title="Nearest perceived obstacle (lines = collisions)")
+    ax.grid(True, alpha=0.3)
 
-    # 5. Throttle and brake vs time
-    ax5 = fig.add_subplot(gs[1, 2])
-    ax5.plot(merged['t'], merged['throttle'], color='green',  linewidth=1.2, label='Throttle')
-    ax5.plot(merged['t'], merged['brake'],    color='red',    linewidth=1.2, label='Brake')
-    ax5.set_xlabel('Time (s)')
-    ax5.set_ylabel('Command [0, 1]')
-    ax5.set_title('Throttle / Brake')
-    ax5.legend(fontsize=8)
-    ax5.grid(True, alpha=0.3)
+    ax = fig.add_subplot(gs[1, 1])
+    ax.plot(M["t"], M["steer"], color="purple", lw=1.2)
+    ax.axhline(0, color="black", ls="--", lw=0.8)
+    ax.set(xlabel="Time (s)", ylabel="Steer [-1, 1] (+ right)", title="Steering command")
+    ax.grid(True, alpha=0.3)
 
-    plot_path = output_dir / 'run_plots.png'
-    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    ax = fig.add_subplot(gs[1, 2])
+    ax.plot(M["t"], M["throttle"], color="green", lw=1.2, label="Throttle")
+    ax.plot(M["t"], M["brake"], color="red", lw=1.2, label="Brake")
+    ax.set(xlabel="Time (s)", ylabel="Command [0, 1]", title="Throttle / Brake")
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
+
+    ax = fig.add_subplot(gs[1, 3])
+    if len(abs_cte):
+        ax.hist(O["cte"][~np.isnan(O["cte"])], bins=40, color="crimson", alpha=0.7)
+    ax.set(xlabel="CTE (m)", ylabel="samples", title="CTE distribution")
+    ax.grid(True, alpha=0.3)
+
+    plot_path = output_dir / "run_plots.png"
+    plt.savefig(plot_path, dpi=150, bbox_inches="tight")
     print(f"Plots saved → {plot_path}")
-    plt.show()
+    if show and matplotlib.get_backend().lower() != "agg":
+        plt.show()
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        description='Analyze a ROS2 bag from a Pure Pursuit run.'
-    )
-    parser.add_argument(
-        'bag_path',
-        type=Path,
-        help='Path to the bag directory, e.g. bags/run_20240428_120000'
-    )
-    parser.add_argument(
-        '--output', '-o',
-        type=Path,
-        default=None,
-        help='Output directory for CSV and plots (default: same as bag_path)'
-    )
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Analyze a ROS2 bag recorded by reset_run.sh.")
+    parser.add_argument("bag_path", type=Path, help="Bag directory, e.g. bags/run_mppi_<timestamp>")
+    parser.add_argument("--output", "-o", type=Path, default=None,
+                        help="Output directory (default: the bag directory)")
+    parser.add_argument("--no-show", action="store_true", help="Don't open the plot window")
     args = parser.parse_args()
-
-    bag_path   = args.bag_path.resolve()
-    output_dir = (args.output or args.bag_path).resolve()
-
-    if not bag_path.exists():
-        print(f"ERROR: Bag not found at {bag_path}")
-        sys.exit(1)
-
-    analyze(bag_path, output_dir)
+    analyze(args.bag_path.resolve(), (args.output or args.bag_path).resolve(), not args.no_show)
