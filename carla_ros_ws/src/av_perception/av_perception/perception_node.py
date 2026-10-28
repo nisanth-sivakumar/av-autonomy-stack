@@ -4,22 +4,29 @@ perception_node.py — av_perception package
 ======================================================
 Provides two perception capabilities:
 
-  1. Object detection
-     Queries the CARLA Python API for nearby vehicles and pedestrians,
-     adds Gaussian noise to simulate real sensor uncertainty, and
-     publishes obstacle positions in the ROS map frame.
+  1. Object detection (simulated)
+     Queries the CARLA Python API for nearby vehicles and pedestrians and
+     publishes each as a box (pose, heading, bounding-box size) with its
+     velocity, adding Gaussian noise to position and velocity to simulate
+     sensor uncertainty.
 
   2. Lane detection
      Finds road-line pixels (palette colour) in the semantic segmentation
      camera image and projects them onto the ground plane using the
      camera intrinsics and mount height (see lane_detection.py) to get
-     the ego's lateral offset from the lane centre in metres.
+     the ego's lateral offset from the lane centre in metres.  Estimates
+     that fail the plausibility gates (crosswalks, intersections) or
+     LaneOffsetFilter's temporal gate are not published.
 
 Publishes
 ---------
+  /perception/objects         (derived_object_msgs/ObjectArray)
+      Obstacle boxes in the map (ROS) frame: pose (centre, heading),
+      shape.dimensions = [length, width, height], twist.linear = velocity,
+      classification CAR / PEDESTRIAN.
+
   /perception/obstacles       (geometry_msgs/PoseArray)
-      Detected obstacle positions in map (ROS) frame.
-      Positive x = forward, positive y = left.
+      The same obstacles' centres only (kept for bags / older consumers).
 
   /perception/lane_offset     (std_msgs/Float32)
       Signed lateral offset from lane centre in metres.
@@ -48,7 +55,6 @@ not by label ID.
 """
 
 import math
-import time
 import numpy as np
 import rclpy
 from rclpy.executors import ExternalShutdownException
@@ -58,6 +64,8 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseArray, Pose, Point, Quaternion
 from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import Float32
+from derived_object_msgs.msg import Object, ObjectArray
+from shape_msgs.msg import SolidPrimitive
 
 try:
     from cv_bridge import CvBridge
@@ -74,6 +82,7 @@ except ImportError:
 
 from av_perception.lane_detection import (
     CameraModel,
+    LaneOffsetFilter,
     road_line_mask,
     estimate_lane_offset,
 )
@@ -97,6 +106,7 @@ class PerceptionNode(Node):
         self.declare_parameter("detection_range_m",     50.0)   # metres ahead/around
         self.declare_parameter("min_detection_dist_m",  2.0)    # ignore closer than this
         self.declare_parameter("position_noise_std_m",  0.4)    # Gaussian noise on position
+        self.declare_parameter("velocity_noise_std_mps", 0.2)   # Gaussian noise on velocity
         self.declare_parameter("detection_rate_hz",     10.0)
 
         # Lane detection — camera geometry must match config/objects.json
@@ -105,8 +115,13 @@ class PerceptionNode(Node):
         self.declare_parameter("camera_fov_deg",        90.0)   # used until camera_info arrives
         self.declare_parameter("lane_max_range_m",      15.0)   # ignore ground farther than this
         self.declare_parameter("lane_width_m",          3.5)    # assumed when one marking visible
-        self.declare_parameter("lane_min_rows",         3)      # rows needed to trust an estimate
+        self.declare_parameter("lane_min_rows",         6)      # rows needed to trust an estimate
         self.declare_parameter("lane_hold_time_s",      1.0)    # hold last estimate this long
+        self.declare_parameter("lane_max_lateral_rate", 1.5)    # m/s; faster jumps are bad frames
+        # |offset| beyond this means the wrong lines were tracked (the car
+        # would be half out of its lane): no detection, rather than clamping
+        # (clamped garbage is self-consistent and passed the temporal gate)
+        self.declare_parameter("lane_max_offset_m",     1.25)
         self.declare_parameter("publish_debug_image",   True)
 
         # ── State ─────────────────────────────────────────────────────────
@@ -116,11 +131,12 @@ class PerceptionNode(Node):
 
         self._carla_world    = None
         self._ego_actor_id:  int | None = None
-        self._obstacles:     list[tuple[float, float]] = []
 
         self._cv_bridge = CvBridge() if CV_AVAILABLE else None
-        self._last_lane_offset: float | None = None
-        self._last_lane_stamp: float = 0.0
+        self._lane_filter = LaneOffsetFilter(
+            max_lateral_rate=self.get_parameter("lane_max_lateral_rate").value,
+            hold_s=self.get_parameter("lane_hold_time_s").value,
+        )
         self._camera_info: CameraInfo | None = None
 
         # ── CARLA connection ──────────────────────────────────────────────
@@ -139,6 +155,7 @@ class PerceptionNode(Node):
         )
 
         # ── Publishers ────────────────────────────────────────────────────
+        self._objects_pub    = self.create_publisher(ObjectArray, "/perception/objects",   10)
         self._obstacle_pub   = self.create_publisher(PoseArray, "/perception/obstacles",     10)
         self._lane_offset_pub = self.create_publisher(Float32,  "/perception/lane_offset",   10)
         self._debug_img_pub  = self.create_publisher(Image,     "/perception/debug/image",   1)
@@ -233,47 +250,58 @@ class PerceptionNode(Node):
                     self._ego_actor_id = actor.id
                     break
 
-        detected = []
-        # Check vehicles and pedestrians
-        for filter_str in ("vehicle.*", "walker.pedestrian.*"):
+        vel_noise = self.get_parameter("velocity_noise_std_mps").value
+        stamp = self.get_clock().now().to_msg()
+        objects = ObjectArray()
+        objects.header.stamp = stamp
+        objects.header.frame_id = "map"
+        poses = PoseArray()
+        poses.header = objects.header
+
+        for filter_str, cls in (("vehicle.*", Object.CLASSIFICATION_CAR),
+                                ("walker.pedestrian.*", Object.CLASSIFICATION_PEDESTRIAN)):
             for actor in actors.filter(filter_str):
                 if actor.id == self._ego_actor_id:
                     continue
-
-                loc     = actor.get_transform().location
-                ros_x   = loc.x
-                ros_y   = -loc.y   # CARLA → ROS frame
-
+                tf = actor.get_transform()
+                ros_x, ros_y = tf.location.x, -tf.location.y      # CARLA → ROS frame
                 dist = math.hypot(ros_x - self._ego_x, ros_y - self._ego_y)
                 if dist < min_dist or dist > detection_range:
                     continue
 
                 # Gaussian noise simulates sensor imprecision
-                noisy_x = ros_x + np.random.normal(0.0, noise_std)
-                noisy_y = ros_y + np.random.normal(0.0, noise_std)
-                detected.append((noisy_x, noisy_y))
+                ox = ros_x + np.random.normal(0.0, noise_std)
+                oy = ros_y + np.random.normal(0.0, noise_std)
+                yaw = -math.radians(tf.rotation.yaw)
+                v = actor.get_velocity()
+                vx = v.x + np.random.normal(0.0, vel_noise)
+                vy = -v.y + np.random.normal(0.0, vel_noise)
+                ext = actor.bounding_box.extent
 
-        self._obstacles = detected
+                o = Object()
+                o.header = objects.header
+                o.id = int(actor.id)
+                o.detection_level = Object.OBJECT_TRACKED
+                o.object_classified = True
+                o.classification = cls
+                o.classification_certainty = 255
+                o.pose.position.x = float(ox)
+                o.pose.position.y = float(oy)
+                o.pose.orientation.z = math.sin(yaw / 2.0)
+                o.pose.orientation.w = math.cos(yaw / 2.0)
+                o.twist.linear.x = float(vx)
+                o.twist.linear.y = float(vy)
+                o.shape.type = SolidPrimitive.BOX
+                o.shape.dimensions = [2.0 * ext.x, 2.0 * ext.y, 2.0 * ext.z]
+                objects.objects.append(o)
 
-        # Publish
-        msg = PoseArray()
-        msg.header.stamp    = self.get_clock().now().to_msg()
-        msg.header.frame_id = "map"
-        for (ox, oy) in detected:
-            p = Pose()
-            p.position.x = ox
-            p.position.y = oy
-            p.position.z = 0.0
-            p.orientation.w = 1.0
-            msg.poses.append(p)
+                p = Pose()
+                p.position.x, p.position.y = float(ox), float(oy)
+                p.orientation = o.pose.orientation
+                poses.poses.append(p)
 
-        self._obstacle_pub.publish(msg)
-
-        if detected:
-            self.get_logger().debug(
-                f"[objects] {len(detected)} obstacles detected  "
-                f"closest={min(math.hypot(ox-self._ego_x, oy-self._ego_y) for ox,oy in detected):.1f} m"
-            )
+        self._objects_pub.publish(objects)
+        self._obstacle_pub.publish(poses)
 
     # ── Lane detection (semantic segmentation) ────────────────────────────
 
@@ -318,18 +346,16 @@ class PerceptionNode(Node):
             min_rows=self.get_parameter("lane_min_rows").value,
         )
 
-        now = time.monotonic()
-        if est.offset_m is not None:
-            self._last_lane_offset = float(np.clip(est.offset_m, -2.5, 2.5))
-            self._last_lane_stamp = now
-        elif now - self._last_lane_stamp > self.get_parameter("lane_hold_time_s").value:
-            self._last_lane_offset = None
-
-        if self._last_lane_offset is not None:
-            self._lane_offset_pub.publish(Float32(data=self._last_lane_offset))
+        now = self.get_clock().now().nanoseconds * 1e-9
+        max_off = self.get_parameter("lane_max_offset_m").value
+        raw = est.offset_m if est.offset_m is not None and abs(est.offset_m) <= max_off else None
+        value = self._lane_filter.update(now, raw)
+        if value is not None:
+            self._lane_offset_pub.publish(Float32(data=value))
 
         self.get_logger().debug(
-            f"[lane] offset={est.offset_m}  rows={est.rows_used}  width={est.lane_width_m}"
+            f"[lane] raw={est.offset_m} published={value} rows={est.rows_used} "
+            f"width={est.lane_width_m} rejected={est.reject_reason}"
         )
 
         if self.get_parameter("publish_debug_image").value:
