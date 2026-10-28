@@ -4,6 +4,7 @@ import pytest
 
 from av_perception.lane_detection import (
     CameraModel,
+    LaneOffsetFilter,
     ROAD_LINE_RGB,
     road_line_mask,
     estimate_lane_offset,
@@ -104,3 +105,68 @@ def test_zero_pitch_camera_still_supported():
 
 def test_no_markings_returns_none():
     assert estimate(np.full((H, W, 3), ROAD_RGB, np.uint8)).offset_m is None
+
+
+# ── Plausibility gates ───────────────────────────────────────────────────────
+
+def add_crosswalk(img, cam, z_from=4.0, z_to=8.0, bar_w=0.5, gap=0.5, half_span=5.0):
+    """Zebra bars (elongated along the road) painted across the road ahead."""
+    poly_img = img.copy()
+    x = -half_span
+    while x < half_span:
+        corners = [(z_from, x), (z_from, x + bar_w), (z_to, x + bar_w), (z_to, x)]
+        px = [cam.ground_to_pixel(z, xx) for z, xx in corners]
+        if all(p is not None for p in px):
+            cv2.fillPoly(poly_img, [np.array([[int(round(u)), int(round(v))] for u, v in px])],
+                         ROAD_LINE_RGB)
+        x += bar_w + gap
+    return poly_img
+
+
+def test_crosswalk_alone_is_rejected():
+    img = add_crosswalk(np.full((H, W, 3), ROAD_RGB, np.uint8), CAM)
+    est = estimate(img)
+    assert est.offset_m is None and est.reject_reason
+
+
+def test_crosswalk_rows_are_skipped_when_lane_lines_exist():
+    img = add_crosswalk(render(CAM, 0.4), CAM, z_from=6.0, z_to=9.0)
+    est = estimate(img)
+    assert est.offset_m == pytest.approx(0.4, abs=0.12)
+
+
+def test_implausible_lane_width_rejected():
+    # Both markings pass the loose per-row bounds (2.5-5.0 m) but a 4.85 m
+    # median width is not a real lane (e.g. two lines of different lanes).
+    est = estimate(render(CAM, 0.0, lane_width=4.85))
+    assert est.offset_m is None and "width" in est.reject_reason
+
+
+# ── Temporal filter ──────────────────────────────────────────────────────────
+
+def test_filter_needs_confirmation_before_first_value():
+    f = LaneOffsetFilter(confirm_frames=3)
+    assert f.update(0.0, 0.2) is None
+    assert f.update(0.1, 0.22) is None
+    assert f.update(0.2, 0.21) == pytest.approx(0.21)
+
+
+def test_filter_rejects_implausible_jumps_and_holds():
+    f = LaneOffsetFilter(max_lateral_rate=1.5, hold_s=1.0, confirm_frames=1)
+    assert f.update(0.0, 0.2) == pytest.approx(0.2)
+    assert f.update(0.1, 1.9) == pytest.approx(0.2)        # 17 m/s sideways: bad frame
+    assert f.update(0.2, 0.25) == pytest.approx(0.25)      # plausible: accepted
+    assert f.update(0.6, None) == pytest.approx(0.25)      # within hold
+    assert f.update(1.5, None) is None                     # hold expired
+
+
+def test_filter_reacquires_after_garbage():
+    f = LaneOffsetFilter(confirm_frames=3, hold_s=0.5)
+    for t, v in [(0.0, 0.1), (0.1, 0.1), (0.2, 0.1)]:
+        f.update(t, v)
+    for t, v in [(0.3, 2.0), (0.4, -1.5), (0.5, 1.2), (0.9, -2.0)]:   # intersection garbage
+        out = f.update(t, v)
+    assert out is None                                      # hold expired, garbage not accepted
+    for t, v in [(1.0, 0.3), (1.1, 0.31), (1.2, 0.3)]:
+        out = f.update(t, v)
+    assert out == pytest.approx(0.3)

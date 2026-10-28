@@ -32,6 +32,19 @@ over the rows (robustly, with outlier rejection) and report c0, the
 offset at the camera.  With too few rows / too short a span the fit falls
 back to linear, then to the median.
 
+Plausibility gates
+------------------
+In CARLA the raw estimate was garbage inside intersections: there are no
+ego-lane markings there, and the tracker latched onto crosswalk stripes.
+So an estimate is only reported when it looks like a lane:
+  - runs wider than `max_marking_width_m` are not lane lines (crosswalk
+    bars, stop lines seen at an angle), and rows with several such bars
+    are skipped as crosswalk rows;
+  - at least `min_rows` rows spanning `min_span_m` of road;
+  - the fitted centre profile must be smooth (`max_fit_rms_m`);
+  - when both markings are seen, the median lane width must be plausible.
+`LaneOffsetFilter` adds a temporal gate on top (rate limit + re-acquisition).
+
 Sign convention
 ---------------
     offset > 0  → ego is LEFT of the lane centre (lane centre is to the right)
@@ -84,6 +97,9 @@ class LaneEstimate:
     offset_m: Optional[float]                       # None = no detection
     lane_width_m: Optional[float] = None
     rows_used: int = 0
+    span_m: float = 0.0                              # road distance covered by the rows
+    fit_rms_m: Optional[float] = None
+    reject_reason: Optional[str] = None              # why offset_m is None
     # (v, u) pixel coordinates of the markings used, for debug drawing
     left_px: list[tuple[int, int]] = field(default_factory=list)
     right_px: list[tuple[int, int]] = field(default_factory=list)
@@ -122,9 +138,14 @@ def estimate_lane_offset(
     lane_width_m: float = 3.5,
     min_lane_width_m: float = 2.5,
     max_lane_width_m: float = 5.0,
-    min_rows: int = 3,
+    min_rows: int = 6,
     min_quad_span_m: float = 5.0,
     gate_m: float = 0.5,
+    max_marking_width_m: float = 0.45,
+    crosswalk_min_bars: int = 3,
+    min_span_m: float = 2.5,
+    max_fit_rms_m: float = 0.15,
+    plausible_width_m: tuple[float, float] = (2.7, 4.6),
 ) -> LaneEstimate:
     """
     Estimate the ego's lateral offset from the lane centre.
@@ -155,6 +176,15 @@ def estimate_lane_offset(
         if z > max_range_m:
             break
         runs = _row_runs(np.flatnonzero(mask[v]))
+        if not runs:
+            continue
+        # Lane lines are ~0.1-0.15 m wide (a double centre line ~0.4 m);
+        # wider runs are crosswalk bars or stop lines.  Several bars in a
+        # row → crosswalk row: skip it entirely.
+        wide = [n * m_per_px > max_marking_width_m for _, n in runs]
+        if sum(wide) >= crosswalk_min_bars:
+            continue
+        runs = [r for r, w in zip(runs, wide) if not w]
         if not runs:
             continue
         lats = [((u + 0.5 - cam.cx) * m_per_px, u) for u, _ in runs]   # metres, right +
@@ -203,27 +233,48 @@ def estimate_lane_offset(
         if "R" in found:
             right_px.append((v, int(round(found["R"][1]))))
 
+    def reject(reason, **kw):
+        return LaneEstimate(offset_m=None, rows_used=len(centres), left_px=left_px,
+                            right_px=right_px, reject_reason=reason, **kw)
+
     if len(centres) < min_rows:
-        return LaneEstimate(offset_m=None, rows_used=len(centres),
-                            left_px=left_px, right_px=right_px)
+        return reject(f"{len(centres)} rows < {min_rows}")
+    span = float(max(dists) - min(dists))
+    if span < min_span_m:
+        return reject(f"span {span:.1f} m < {min_span_m} m", span_m=span)
+    width = float(np.median(widths)) if widths else None
+    if width is not None and len(widths) >= 3 and not (
+            plausible_width_m[0] <= width <= plausible_width_m[1]):
+        return reject(f"lane width {width:.2f} m implausible", span_m=span, lane_width_m=width)
+    offset, rms = _fit_offset_at_zero(np.asarray(dists), np.asarray(centres), min_quad_span_m)
+    if rms > max_fit_rms_m:
+        return reject(f"fit rms {rms:.2f} m > {max_fit_rms_m} m", span_m=span,
+                      lane_width_m=width, fit_rms_m=rms)
     return LaneEstimate(
-        offset_m=_fit_offset_at_zero(np.asarray(dists), np.asarray(centres), min_quad_span_m),
-        lane_width_m=float(np.median(widths)) if widths else None,
+        offset_m=offset,
+        lane_width_m=width,
         rows_used=len(centres),
+        span_m=span,
+        fit_rms_m=rms,
         left_px=left_px,
         right_px=right_px,
     )
 
 
-def _fit_offset_at_zero(z: np.ndarray, c: np.ndarray, min_quad_span_m: float) -> float:
-    """Extrapolate the lane-centre profile c(Z) to Z = 0 (robust polynomial fit)."""
+def _fit_offset_at_zero(z: np.ndarray, c: np.ndarray,
+                        min_quad_span_m: float) -> tuple[float, float]:
+    """
+    Extrapolate the lane-centre profile c(Z) to Z = 0 (robust polynomial fit).
+
+    Returns (offset at Z = 0, RMS residual of the kept rows).
+    """
     span = float(z.max() - z.min())
     if len(z) >= 6 and span >= min_quad_span_m:
         deg = 2
     elif len(z) >= 3 and span >= 2.0:
         deg = 1
     else:
-        return float(np.median(c))
+        return float(np.median(c)), float(np.std(c))
     keep = np.ones(len(z), bool)
     for _ in range(2):                       # refit without gross outliers
         coef = np.polyfit(z[keep], c[keep], deg)
@@ -233,4 +284,52 @@ def _fit_offset_at_zero(z: np.ndarray, c: np.ndarray, min_quad_span_m: float) ->
         if new_keep.sum() < deg + 2 or np.array_equal(new_keep, keep):
             break
         keep = new_keep
-    return float(np.polyval(coef, 0.0))
+    rms = float(np.sqrt(np.mean((np.polyval(coef, z[keep]) - c[keep]) ** 2)))
+    return float(np.polyval(coef, 0.0)), rms
+
+
+class LaneOffsetFilter:
+    """
+    Temporal plausibility gate for successive lane-offset estimates.
+
+    - Rate limit: the car cannot move sideways faster than
+      `max_lateral_rate` (m/s); a jump beyond that is a bad frame, and the
+      last good value is held for up to `hold_s`.
+    - Re-acquisition: with no current reference (start-up, or after the
+      hold expired, e.g. leaving an intersection), `confirm_frames`
+      consecutive estimates must agree within `confirm_tol_m` before one is
+      accepted, so a single plausible-looking garbage frame isn't.
+    """
+
+    def __init__(self, max_lateral_rate: float = 1.5, hold_s: float = 1.0,
+                 confirm_frames: int = 3, confirm_tol_m: float = 0.3):
+        self.max_lateral_rate = max_lateral_rate
+        self.hold_s = hold_s
+        self.confirm_frames = confirm_frames
+        self.confirm_tol_m = confirm_tol_m
+        self._value: Optional[float] = None
+        self._stamp: float = 0.0
+        self._pending: list[float] = []
+
+    def update(self, t: float, estimate: Optional[float]) -> Optional[float]:
+        """Feed one estimate (None = no detection) at time t; return the value to publish."""
+        if estimate is not None:
+            if self._value is not None:
+                allowed = self.max_lateral_rate * max(t - self._stamp, 0.0) + 0.1
+                if abs(estimate - self._value) <= allowed:
+                    self._value, self._stamp = estimate, t
+                    return self._value
+                # implausible jump: treat as a bad frame
+            else:
+                if self._pending and abs(estimate - self._pending[-1]) > self.confirm_tol_m:
+                    self._pending = []
+                self._pending.append(estimate)
+                if len(self._pending) >= self.confirm_frames:
+                    self._value, self._stamp = estimate, t
+                    self._pending = []
+                    return self._value
+                return None
+        if self._value is not None and t - self._stamp <= self.hold_s:
+            return self._value
+        self._value = None
+        return None
