@@ -60,19 +60,61 @@ def pure_pursuit_steer(
     return float(max(-max_steer, min(max_steer, -steer_raw * gain)))
 
 
+def _as_obstacle(o) -> tuple:
+    """(x, y) point or (x, y, yaw, half_length, half_width, vx, vy) box."""
+    if len(o) == 2:
+        return (o[0], o[1], 0.0, 0.0, 0.0, 0.0, 0.0)
+    return tuple(o)
+
+
+def _closest_on_path(path: Sequence[Point], ox: float, oy: float):
+    """(distance, arc length, unit direction) of the closest point on a polyline."""
+    s_acc = 0.0
+    best = (float("inf"), 0.0, (1.0, 0.0))
+    for (ax, ay), (bx, by) in zip(path[:-1], path[1:]):
+        abx, aby = bx - ax, by - ay
+        seg = math.hypot(abx, aby)
+        if seg < 1e-6:
+            continue
+        t = max(0.0, min(1.0, ((ox - ax) * abx + (oy - ay) * aby) / (seg * seg)))
+        d = math.hypot(ox - (ax + t * abx), oy - (ay + t * aby))
+        if d < best[0]:
+            best = (d, s_acc + t * seg, (abx / seg, aby / seg))
+        s_acc += seg
+    return best
+
+
 def obstacle_along_path(
     px: float, py: float, yaw: float,
     waypoints: Sequence[Point],
-    obstacles: Sequence[Point],
+    obstacles: Sequence,
     corridor_half_width: float,
-) -> Optional[float]:
+    ego_half_length: float = 0.0,
+    ego_speed: float = 0.0,
+    max_predict_s: float = 4.0,
+    min_speed: float = 1.0,
+    predict_samples: int = 8,
+    moving_threshold: float = 0.5,
+) -> Optional[tuple[float, float]]:
     """
-    Return the arc length to the nearest obstacle inside the path corridor.
+    Return (gap, v_along) for the nearest obstacle blocking the path corridor.
 
-    Arc length is measured in metres from the ego position along the path.
-    An obstacle counts if its distance to the path is within
-    `corridor_half_width`; obstacles behind the vehicle are ignored.
-    Returns None if the corridor is clear.
+    obstacles : (x, y) points or (x, y, yaw, half_length, half_width, vx, vy)
+                boxes in the map frame.
+    An obstacle blocks if its box comes within `corridor_half_width` of the
+    path anywhere along its predicted motion until the ego gets there
+    (t = arc length / max(ego_speed, min_speed), capped at `max_predict_s`;
+    the swept positions are sampled) — so a pedestrian walking into, or
+    across, the lane counts.
+
+    gap     : arc length from the ego along the path to the obstacle box,
+              minus `ego_half_length` (≈ bumper-to-box distance)
+    v_along : obstacle velocity along the path direction there
+              (> 0 = moving away from the ego, e.g. a lead car)
+
+    Obstacles slower than `moving_threshold` are treated as stationary (so
+    velocity noise on parked cars doesn't sweep them into the corridor).
+    Obstacles behind the ego are ignored.  Returns None if clear.
     """
     if not obstacles:
         return None
@@ -82,27 +124,98 @@ def obstacle_along_path(
         path.append((px + 50.0 * math.cos(yaw), py + 50.0 * math.sin(yaw)))
 
     hx, hy = math.cos(yaw), math.sin(yaw)
-    best: Optional[float] = None
-    for (ox, oy) in obstacles:
-        if (ox - px) * hx + (oy - py) * hy <= 0.0:
-            continue  # behind ego
-        # Closest point on the path polyline → lateral distance and arc length
-        s_acc = 0.0
-        min_lat, s_at_min = float("inf"), 0.0
-        for (ax, ay), (bx, by) in zip(path[:-1], path[1:]):
-            abx, aby = bx - ax, by - ay
-            seg = math.hypot(abx, aby)
-            if seg < 1e-6:
+    best: Optional[tuple[float, float]] = None
+    for o in obstacles:
+        ox, oy, oyaw, hl, hw, vx, vy = _as_obstacle(o)
+        if math.hypot(vx, vy) < moving_threshold:
+            vx = vy = 0.0
+        d, s, (ux, uy) = _closest_on_path(path, ox, oy)
+        t = min(max_predict_s, s / max(ego_speed, min_speed))
+        steps = predict_samples if (vx or vy) else 0
+        for k in range(steps + 1):
+            cx = ox + vx * t * k / max(steps, 1)
+            cy = oy + vy * t * k / max(steps, 1)
+            if (cx - px) * hx + (cy - py) * hy <= 0.0:
+                continue  # behind ego
+            d, s, (ux, uy) = _closest_on_path(path, cx, cy)
+            rel = oyaw - math.atan2(uy, ux)
+            ext_along = hl * abs(math.cos(rel)) + hw * abs(math.sin(rel))
+            ext_lat = hl * abs(math.sin(rel)) + hw * abs(math.cos(rel))
+            if d - ext_lat > corridor_half_width:
                 continue
-            t = ((ox - ax) * abx + (oy - ay) * aby) / (seg * seg)
-            t = max(0.0, min(1.0, t))
-            lat = math.hypot(ox - (ax + t * abx), oy - (ay + t * aby))
-            if lat < min_lat:
-                min_lat, s_at_min = lat, s_acc + t * seg
-            s_acc += seg
-        if min_lat <= corridor_half_width and (best is None or s_at_min < best):
-            best = s_at_min
+            gap = max(0.0, s - ext_along - ego_half_length)
+            v_along = vx * ux + vy * uy
+            if best is None or gap < best[0]:
+                best = (gap, v_along)
     return best
+
+
+def effective_gap(gap: Optional[float], v_along: float, comfort_decel: float) -> Optional[float]:
+    """
+    Return the gap credited with a lead vehicle's own stopping distance.
+
+    An obstacle moving away at v can itself stop within v²/(2a), so the ego only needs
+    to be able to stop behind where the lead would stop.  Stationary or
+    oncoming obstacles get no credit.
+    """
+    if gap is None:
+        return None
+    return gap + max(0.0, v_along) ** 2 / (2.0 * comfort_decel)
+
+
+def path_length_ahead(px: float, py: float, waypoints: Sequence[Point]) -> float:
+    """Length of the path from the ego through all remaining waypoints."""
+    pts = [(px, py)] + list(waypoints)
+    return sum(math.dist(a, b) for a, b in zip(pts[:-1], pts[1:]))
+
+
+def path_curvature_ahead(px: float, py: float, waypoints: Sequence[Point],
+                         distance: float, min_spacing: float = 1.0) -> float:
+    """
+    Return the largest |curvature| (1/m) of the path within `distance` of the ego.
+
+    Uses the Menger curvature of consecutive point triples (points closer than
+    `min_spacing` are skipped to avoid amplifying noise).
+    """
+    pts = [(px, py)]
+    travelled = 0.0
+    for w in waypoints:
+        step = math.dist(pts[-1], w)
+        if step < min_spacing:
+            continue
+        pts.append(w)
+        travelled += step
+        if travelled > distance:
+            break
+    kappa = 0.0
+    for a, b, c in zip(pts, pts[1:], pts[2:]):
+        ab, bc, ca = math.dist(a, b), math.dist(b, c), math.dist(c, a)
+        area2 = abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]))
+        if ab * bc * ca > 1e-9:
+            kappa = max(kappa, 2.0 * area2 / (ab * bc * ca))
+    return kappa
+
+
+def adaptive_lookahead(
+    speed: float, px: float, py: float, waypoints: Sequence[Point],
+    time_s: float, min_m: float, max_m: float, curvature_gain: float,
+) -> float:
+    """
+    Return the Pure Pursuit lookahead distance.
+
+    `time_s` seconds of travel, clamped to [min_m, max_m], then capped at
+    `curvature_gain` × the radius of the
+    tightest curve within reach.  Pure Pursuit cuts corners by roughly
+    L²/(2R), so in tight junction turns a shorter lookahead tracks the
+    path much more closely; on straights and gentle curves the cap does
+    not bind.
+    """
+    lookahead = max(min_m, min(max_m, time_s * speed))
+    if curvature_gain > 0.0:
+        kappa = path_curvature_ahead(px, py, waypoints, lookahead + 5.0)
+        if kappa > 1e-3:
+            lookahead = max(min_m, min(lookahead, curvature_gain / kappa))
+    return lookahead
 
 
 def obstacle_speed_limit(
@@ -110,7 +223,10 @@ def obstacle_speed_limit(
     stop_distance: float, comfort_decel: float,
 ) -> float:
     """
-    Return the speed that allows stopping `stop_distance` short of an obstacle.
+    Return the speed that allows stopping `stop_distance` short of a point.
+
+    Used for obstacles (distance = gap to the box) and for the end of the
+    path (goal / dead end).
 
     Assumes constant deceleration `comfort_decel`:  v = sqrt(2·a·(s − s_stop)).
     """

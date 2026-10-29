@@ -4,22 +4,35 @@ Pure Pursuit controller node for the av_control package.
 
 Subscribes : /carla/ego_vehicle/odometry       (nav_msgs/Odometry)
              /planning/trajectory              (nav_msgs/Path, latched)
-             /perception/obstacles             (geometry_msgs/PoseArray)
+             /perception/objects               (derived_object_msgs/ObjectArray: boxes + velocity)
+             /perception/obstacles             (geometry_msgs/PoseArray, fallback: points)
 Publishes  : /carla/ego_vehicle/vehicle_control_cmd  (carla_msgs/CarlaEgoVehicleControl)
 
                 ┌──────────────┐  /planning/trajectory  ┌────────────────┐
   CARLA map ──▶ │ planner_node │ ─────────────────────▶ │ controller_node│
                 └──────────────┘                        └────────────────┘
-                                   /perception/obstacles ──────▲
+                                   /perception/objects ────────▲
 
-Lateral   : Pure Pursuit on the planned path (see pure_pursuit.py).
-Longitudinal:
-  - target_speed, reduced so the vehicle can stop `stop_distance` short
-    of any obstacle inside a corridor around the planned path
-    (v = sqrt(2·a·(s − s_stop))).  The planners shift the path laterally
-    around obstacles; this is the fallback when the path stays blocked.
-    The distance is median-filtered (perception noise) and a stop is held
-    until the obstacle is `resume_margin` beyond the stop line.
+Lateral
+-------
+Pure Pursuit on the planned path with an adaptive lookahead: `lookahead_time_s`
+of travel clamped to [lookahead_min_m, lookahead_max_m], capped at
+`lookahead_curvature_gain` × the radius of the tightest curve ahead (Pure
+Pursuit cuts corners by ~L²/2R, which mattered at tight junction turns).
+
+Longitudinal
+------------
+speed limit = min(target_speed, obstacle limit, end-of-path limit)
+  - obstacle limit: stop `stop_distance_m` short of the nearest obstacle box
+    whose current or predicted position is within `corridor_half_width_m` of
+    the planned path (v = sqrt(2·a·(gap − stop))).  A lead vehicle moving away
+    is credited with its own stopping distance, so the ego follows it rather
+    than stopping.  The planners steer around obstacles; this is the fallback.
+    The gap is median-filtered and a stop is held until the obstacle is clear
+    (ObstacleSpeedGovernor).
+  - end-of-path limit: stop `end_stop_margin_m` before the last waypoint.  Normal
+    horizons are 60 m+ so this only binds at the goal (the planner ends the path
+    there) or a dead end.
   - P-law on throttle; braking when over the limit.
 
 Safety guards
@@ -29,7 +42,9 @@ Safety guards
   - stuck detection: if throttle is being applied but the vehicle has not
     moved for `stuck_timeout`, brake for `stuck_recovery_time` and retry;
     after `stuck_max_retries` consecutive attempts, hold the brake.
-    Deliberate stops (obstacle ahead) never count as stuck.
+    Deliberate stops never count as stuck.
+
+Time: the node clock follows /clock with use_sim_time (launch default).
 
 Coordinate conventions
 ----------------------
@@ -38,7 +53,6 @@ Coordinate conventions
 """
 
 import math
-import time
 
 import rclpy
 from rclpy.executors import ExternalShutdownException
@@ -52,16 +66,25 @@ from rclpy.qos import (
 from nav_msgs.msg import Odometry, Path
 from geometry_msgs.msg import PoseArray
 from carla_msgs.msg import CarlaEgoVehicleControl
+from derived_object_msgs.msg import ObjectArray
 
 from av_control.pure_pursuit import (
     quaternion_to_yaw,
     prune_passed,
     find_lookahead,
     pure_pursuit_steer,
+    adaptive_lookahead,
     obstacle_along_path,
+    effective_gap,
+    path_length_ahead,
+    obstacle_speed_limit,
     speed_command,
     ObstacleSpeedGovernor,
 )
+
+# Size assumed for obstacles reported as bare points (a mid-size car)
+DEFAULT_HALF_LENGTH = 2.2
+DEFAULT_HALF_WIDTH = 0.9
 
 
 class PurePursuitController(Node):
@@ -70,25 +93,33 @@ class PurePursuitController(Node):
         super().__init__("pure_pursuit_controller")
 
         # ── Parameters ────────────────────────────────────────────────────
-        self.declare_parameter("lookahead_distance",  6.0)
         self.declare_parameter("target_speed",        3.0)
         self.declare_parameter("kp_speed",            0.5)
         self.declare_parameter("kp_brake",            0.5)
         self.declare_parameter("steering_gain",       1.0)
         self.declare_parameter("max_steer",           0.6)
         self.declare_parameter("wheelbase",           2.875)   # Tesla Model 3
+        self.declare_parameter("ego_half_length",     2.35)    # Tesla Model 3: 4.7 m
         self.declare_parameter("debug_interval",      10)
 
-        # Obstacle-aware speed
+        # Adaptive lookahead
+        self.declare_parameter("lookahead_time_s",         2.0)   # 6 m at 3 m/s
+        self.declare_parameter("lookahead_min_m",          3.0)
+        self.declare_parameter("lookahead_max_m",          12.0)
+        self.declare_parameter("lookahead_curvature_gain", 0.25)  # L ≤ 0.25·R
+
+        # Obstacle-aware speed (box edges; footprints touch below ~0.93 m)
         self.declare_parameter("use_obstacles",          True)
-        # corridor = ego half-width + obstacle half-width + margin
-        # (footprints overlap below ~1.8 m; planners keep a wider berth)
-        self.declare_parameter("corridor_half_width_m",  2.2)
-        self.declare_parameter("stop_distance_m",        8.0)  # centre-to-centre standoff
-        self.declare_parameter("comfort_decel",          2.0)  # m/s²
-        self.declare_parameter("resume_margin_m",        2.0)  # extra clearance to restart
-        self.declare_parameter("obstacle_filter_window", 5)    # median over N control ticks
-        self.declare_parameter("obstacle_timeout",       1.0)  # s; drop stale obstacle lists
+        self.declare_parameter("corridor_half_width_m",  1.35)  # path → obstacle box edge
+        self.declare_parameter("stop_distance_m",        3.5)   # bumper → box gap when stopped
+        self.declare_parameter("comfort_decel",          2.0)   # m/s²
+        self.declare_parameter("resume_margin_m",        2.0)   # extra clearance to restart
+        self.declare_parameter("obstacle_filter_window", 5)     # median over N control ticks
+        self.declare_parameter("obstacle_timeout",       1.0)   # s; drop stale obstacle lists
+        self.declare_parameter("obstacle_predict_s",     4.0)   # max prediction horizon
+
+        # End of path (goal / dead end)
+        self.declare_parameter("end_stop_margin_m",   1.0)
 
         # Stuck detection / recovery
         self.declare_parameter("stuck_speed_thresh",  0.2)   # m/s
@@ -104,8 +135,10 @@ class PurePursuitController(Node):
         self._tick = 0
         self._last_trajectory_stamp: float | None = None
 
-        self._obstacles: list[tuple[float, float]] = []
-        self._last_obstacle_stamp: float | None = None
+        self._objects: list[tuple] = []
+        self._objects_stamp: float | None = None
+        self._points: list[tuple] = []
+        self._points_stamp: float | None = None
         self._governor = ObstacleSpeedGovernor(
             stop_distance=self._p("stop_distance_m"),
             comfort_decel=self._p("comfort_decel"),
@@ -134,15 +167,10 @@ class PurePursuitController(Node):
         self._cmd_pub = self.create_publisher(
             CarlaEgoVehicleControl, "/carla/ego_vehicle/vehicle_control_cmd", 10,
         )
-        self.create_subscription(
-            Odometry, "/carla/ego_vehicle/odometry", self._odom_cb, odom_qos,
-        )
-        self.create_subscription(
-            Path, "/planning/trajectory", self._trajectory_cb, latched_qos,
-        )
-        self.create_subscription(
-            PoseArray, "/perception/obstacles", self._obstacles_cb, 10,
-        )
+        self.create_subscription(Odometry, "/carla/ego_vehicle/odometry", self._odom_cb, odom_qos)
+        self.create_subscription(Path, "/planning/trajectory", self._trajectory_cb, latched_qos)
+        self.create_subscription(ObjectArray, "/perception/objects", self._objects_cb, 10)
+        self.create_subscription(PoseArray, "/perception/obstacles", self._points_cb, 10)
 
         self.get_logger().info(
             "PurePursuitController ready — waiting for /planning/trajectory "
@@ -151,13 +179,29 @@ class PurePursuitController(Node):
 
     # ── Callbacks ─────────────────────────────────────────────────────────
 
+    def _now(self) -> float:
+        return self.get_clock().now().nanoseconds * 1e-9
+
     def _trajectory_cb(self, msg: Path):
         self._waypoints = [(ps.pose.position.x, ps.pose.position.y) for ps in msg.poses]
-        self._last_trajectory_stamp = time.monotonic()
+        self._last_trajectory_stamp = self._now()
 
-    def _obstacles_cb(self, msg: PoseArray):
-        self._obstacles = [(p.position.x, p.position.y) for p in msg.poses]
-        self._last_obstacle_stamp = time.monotonic()
+    def _objects_cb(self, msg: ObjectArray):
+        objs = []
+        for o in msg.objects:
+            dims = list(o.shape.dimensions)
+            hl = dims[0] / 2.0 if len(dims) > 0 and dims[0] > 0 else DEFAULT_HALF_LENGTH
+            hw = dims[1] / 2.0 if len(dims) > 1 and dims[1] > 0 else DEFAULT_HALF_WIDTH
+            objs.append((o.pose.position.x, o.pose.position.y,
+                         quaternion_to_yaw(o.pose.orientation), hl, hw,
+                         o.twist.linear.x, o.twist.linear.y))
+        self._objects = objs
+        self._objects_stamp = self._now()
+
+    def _points_cb(self, msg: PoseArray):
+        self._points = [(p.position.x, p.position.y, 0.0, DEFAULT_HALF_LENGTH,
+                         DEFAULT_HALF_WIDTH, 0.0, 0.0) for p in msg.poses]
+        self._points_stamp = self._now()
 
     def _odom_cb(self, msg: Odometry):
         px = msg.pose.pose.position.x
@@ -171,7 +215,7 @@ class PurePursuitController(Node):
 
         self._tick += 1
         debug = (self._tick % self._p("debug_interval") == 0)
-        now = time.monotonic()
+        now = self._now()
 
         # ── Guard: no / stale trajectory ──────────────────────────────────
         if self._last_trajectory_stamp is None:
@@ -199,13 +243,21 @@ class PurePursuitController(Node):
                 f"Stuck recovery: retrying ({self._stuck_retries}/{self._p('stuck_max_retries')})."
             )
 
-        # ── Lateral: Pure Pursuit ─────────────────────────────────────────
+        # ── Lateral: Pure Pursuit with adaptive lookahead ─────────────────
         prune_passed(self._waypoints, px, py, yaw)
-        target = find_lookahead(self._waypoints, px, py, self._p("lookahead_distance"))
+        lookahead = adaptive_lookahead(
+            speed, px, py, self._waypoints,
+            time_s=self._p("lookahead_time_s"),
+            min_m=self._p("lookahead_min_m"),
+            max_m=self._p("lookahead_max_m"),
+            curvature_gain=self._p("lookahead_curvature_gain"),
+        )
+        target = find_lookahead(self._waypoints, px, py, lookahead)
         if target is None:
+            # No path ahead (goal reached / road end / planner gap): hold still
             if debug:
-                self.get_logger().warn("Trajectory exhausted — waiting for planner to extend it.")
-            self._publish(0.0, 0.0, 0.3 if speed > 0.5 else 0.0)
+                self.get_logger().info("No path ahead — holding.")
+            self._publish(0.0, 0.0, 0.3 if speed > 0.5 else 1.0)
             return
         steer = pure_pursuit_steer(
             px, py, yaw, target,
@@ -214,16 +266,25 @@ class PurePursuitController(Node):
             max_steer=self._p("max_steer"),
         )
 
-        # ── Longitudinal: obstacle-aware speed ────────────────────────────
+        # ── Longitudinal ──────────────────────────────────────────────────
         target_speed = self._p("target_speed")
-        obs_dist = None
-        if self._p("use_obstacles") and self._obstacles_fresh(now):
-            obs_dist = obstacle_along_path(
-                px, py, yaw, self._waypoints, self._obstacles,
-                self._p("corridor_half_width_m"),
+        decel = self._p("comfort_decel")
+        hit = None
+        if self._p("use_obstacles"):
+            hit = obstacle_along_path(
+                px, py, yaw, self._waypoints, self._current_obstacles(now),
+                corridor_half_width=self._p("corridor_half_width_m"),
+                ego_half_length=self._p("ego_half_length"),
+                ego_speed=speed,
+                max_predict_s=self._p("obstacle_predict_s"),
             )
-        speed_limit = self._governor.update(obs_dist, target_speed)
-        obs_dist = self._governor.filtered_distance
+        gap = effective_gap(hit[0], hit[1], decel) if hit else None
+        obstacle_limit = self._governor.update(gap, target_speed)
+        end_limit = obstacle_speed_limit(
+            path_length_ahead(px, py, self._waypoints), target_speed,
+            self._p("end_stop_margin_m"), decel,
+        )
+        speed_limit = min(obstacle_limit, end_limit)
         throttle, brake = speed_command(
             speed, speed_limit, self._p("kp_speed"), self._p("kp_brake"),
         )
@@ -234,23 +295,26 @@ class PurePursuitController(Node):
             return
 
         if debug:
-            obs_txt = f"{obs_dist:.1f} m" if obs_dist is not None else "clear"
+            g = self._governor.filtered_distance
+            obs_txt = f"{g:.1f} m" if g is not None else "clear"
             self.get_logger().info(
                 f"[ctrl] pos=({px:.1f},{py:.1f}) yaw={math.degrees(yaw):.0f}° "
                 f"v={speed:.2f}/{speed_limit:.2f} m/s  steer={steer:+.3f}  "
                 f"thr={throttle:.2f} brk={brake:.2f}  obstacle={obs_txt}  "
-                f"wps={len(self._waypoints)}"
+                f"L={lookahead:.1f} m  wps={len(self._waypoints)}"
             )
 
         self._publish(throttle, steer, brake)
 
     # ── Helpers ───────────────────────────────────────────────────────────
 
-    def _obstacles_fresh(self, now: float) -> bool:
-        return (
-            self._last_obstacle_stamp is not None
-            and now - self._last_obstacle_stamp <= self._p("obstacle_timeout")
-        )
+    def _current_obstacles(self, now: float) -> list[tuple]:
+        timeout = self._p("obstacle_timeout")
+        if self._objects_stamp is not None and now - self._objects_stamp <= timeout:
+            return self._objects
+        if self._points_stamp is not None and now - self._points_stamp <= timeout:
+            return self._points
+        return []
 
     def _check_stuck(self, throttle: float, speed: float, now: float) -> bool:
         """Return True (and start a recovery phase) if pushing without moving."""
