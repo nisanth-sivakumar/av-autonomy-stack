@@ -30,10 +30,11 @@ Cost
       + w_clear  · Σ_obstacles max(0, comfort_clearance − d_min)²
       + w_consistency · (d_t − previous d_t)²       (hysteresis)
 
-Clearance uses a footprint-shaped distance (along-path offset divided by
-`obstacle_long_scale`), so the path must be laterally clear for a few
-metres before and after an obstacle, not just at the closest waypoint.
-A candidate is infeasible below `min_clearance_m`.  If every candidate is
+Clearance is measured to each obstacle's box at its predicted position
+when the ego gets there (obstacles.box_clearance): the lateral gap from
+the ego's centreline to the box edge wherever the ego's footprint
+overlaps the obstacle lengthwise.  A candidate is infeasible below
+`min_clearance_m`.  If every candidate is
 infeasible the planner returns the one with the most clearance (the
 centre-line would be the path most certainly blocked); the controller's
 obstacle-aware speed law stops the vehicle if that is still not enough.
@@ -49,7 +50,7 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from av_planning.mppi_planner import footprint_distance
+from av_planning.obstacles import as_obstacle_array, avoidable, box_clearance, path_times
 
 Waypoint = tuple[float, float, float]   # (ros_x, ros_y, ros_yaw)
 
@@ -69,12 +70,17 @@ class LatticeConfig:
     w_clearance:          float = 2.0
     w_consistency:        float = 0.5
 
-    # Obstacles (distances to obstacle centres)
-    # (vehicle footprints overlap below ~1.8 m; the controller treats
-    # < 2.2 m from its path as blocking, so plan with more margin)
-    min_clearance_m:      float = 2.6      # below → infeasible
-    comfort_clearance_m:  float = 3.2      # below → clearance cost
-    obstacle_long_scale:  float = 2.5      # along-path distance divisor
+    # Obstacles: clearance from the ego centreline to the obstacle box edge
+    # (footprints touch below the ego half-width ~0.93 m; the controller
+    # treats < 1.35 m from its path as blocking, so plan with more margin)
+    min_clearance_m:      float = 1.75     # below → infeasible
+    comfort_clearance_m:  float = 2.35     # below → clearance cost
+    ego_half_length:      float = 2.35     # Tesla Model 3: 4.7 m long
+    # Obstacles that can't be passed with at least this clearance even at
+    # max_offset_m are left to the controller (it stops; = its corridor)
+    pass_clearance_m:     float = 1.35
+    # Must also be clear this far before/after the obstacle (early, smooth swerve)
+    obstacle_long_margin_m: float = 3.0
 
 
 @dataclass
@@ -108,13 +114,19 @@ class LatticePlanner:
     def plan(
         self,
         centre_line:        Sequence[Waypoint],
-        obstacle_positions: Sequence[tuple[float, float]] = (),
+        obstacle_positions: Sequence = (),
         current_offset_m:   float = 0.0,
+        ego_xy:             Optional[tuple[float, float]] = None,
+        ego_speed:          float = 0.0,
     ) -> list[Waypoint]:
         if not centre_line:
             return []
         cl = np.asarray(centre_line, dtype=float)
-        obs = np.asarray(obstacle_positions, dtype=float).reshape(-1, 2)
+        # lead cars (same direction) are followed by the controller, not avoided
+        obs = avoidable(as_obstacle_array(obstacle_positions), cl[:, :2], cl[:, 2],
+                        max_offset=self.cfg.max_offset_m,
+                        pass_clearance=self.cfg.pass_clearance_m)
+        times = path_times(cl[:, 0], cl[:, 1], ego_xy, ego_speed) if len(obs) else None
 
         d0 = self._continuity_offset(cl)
         if d0 is None:
@@ -125,7 +137,8 @@ class LatticePlanner:
         ]
         for c in candidates:
             pts = np.asarray([(x, y) for x, y, _ in c.waypoints])
-            min_d = _min_dist_per_obstacle(pts, cl[:, 2], obs, self.cfg.obstacle_long_scale)
+            min_d = _min_clearance_per_obstacle(pts, cl[:, 2], obs, self.cfg.ego_half_length,
+                                                times, self.cfg.obstacle_long_margin_m)
             c.feasible = bool(min_d.size == 0 or min_d.min() >= self.cfg.min_clearance_m)
             c.min_clearance = float(min_d.min()) if min_d.size else float("inf")
             c.cost = self._score(c, pts, min_d)
@@ -225,12 +238,13 @@ class LatticePlanner:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _min_dist_per_obstacle(pts: np.ndarray, yaws: np.ndarray, obs: np.ndarray,
-                           long_scale: float) -> np.ndarray:
-    """Minimum footprint-shaped distance from the path to each obstacle, shape (N,)."""
+def _min_clearance_per_obstacle(pts: np.ndarray, yaws: np.ndarray, obs: np.ndarray,
+                                ego_half_length: float, times, long_margin: float) -> np.ndarray:
+    """Minimum ego-to-box clearance along the path for each obstacle, shape (N,)."""
     if obs.size == 0 or pts.size == 0:
         return np.empty(0)
-    return footprint_distance(pts[:, 0], pts[:, 1], yaws, obs, long_scale).min(axis=0)
+    return box_clearance(pts[:, 0], pts[:, 1], yaws, obs, ego_half_length, times,
+                         long_margin=long_margin).min(axis=0)
 
 
 def _headings(xs: np.ndarray, ys: np.ndarray, fallback: np.ndarray) -> np.ndarray:

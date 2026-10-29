@@ -23,7 +23,8 @@ Algorithm per planning cycle
   4. Build K trajectories:
          traj[k][i] = centre_line[i] + (U*[i] + δU[k][i]) × lateral_dir[i]
   5. Score each trajectory (lane deviation, smoothness, offset magnitude,
-     obstacle clearance).
+     obstacle clearance to each obstacle's box at its predicted position
+     when the ego gets there — see obstacles.py).
   6. Importance weights  w[k] = exp(−(J[k] − min J) / λ).
   7. U* ← U* + α · Σ w[k]·δU[k]     (α = update_step_size)
   8. Return the trajectory built from the updated U*.
@@ -38,6 +39,8 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 import numpy as np
+
+from av_planning.obstacles import as_obstacle_array, avoidable, box_clearance, path_times
 
 
 @dataclass
@@ -61,14 +64,19 @@ class MPPIConfig:
     w_smoothness:       float = 2.0     # squared rate of change of lateral offset
     w_deviation:        float = 0.5     # squared offset magnitude (prefer centre)
 
-    # Obstacle avoidance: cost w·((r/d)² − 1) when a trajectory passes within
-    # r = min_clearance_m of an obstacle centre (continuous, 0 at d = r).
+    # Obstacle avoidance: cost w·Σ((r/d)² − 1) over path points whose
+    # clearance d to an obstacle box (obstacles.box_clearance: gap from the
+    # ego centreline to the box edge) is below r = min_clearance_m.
+    # Continuous, 0 at d = r.  Footprints touch below the ego half-width
+    # (~0.93 m); the controller's corridor is 1.35 m.
     w_obstacle:         float = 10.0
-    min_clearance_m:    float = 2.8
-    # Longitudinal distance is divided by this before computing clearance,
-    # so the elongated vehicle footprint is respected: points a few metres
-    # before/after the obstacle must also be laterally clear.
-    obstacle_long_scale: float = 2.5
+    min_clearance_m:    float = 1.95
+    ego_half_length:    float = 2.35    # Tesla Model 3: 4.7 m long
+    # Obstacles that can't be passed with at least this clearance even at
+    # max_lateral_offset are left to the controller (it stops; = its corridor)
+    pass_clearance_m:   float = 1.35
+    # Must also be clear this far before/after the obstacle (early, smooth swerve)
+    obstacle_long_margin_m: float = 3.0
 
     seed:               Optional[int] = None
 
@@ -80,8 +88,9 @@ class MPPIPlanner:
         planner = MPPIPlanner(config)
         trajectory = planner.plan(
             centre_line        = [(ros_x, ros_y, ros_yaw), ...],
-            obstacle_positions = [(ros_x, ros_y), ...],
+            obstacle_positions = [Obstacle(...) | (x, y) | 7-tuple, ...],
             advance_wps        = distance_moved / wp_step,
+            ego_xy=(x, y), ego_speed=v,     # for predicting moving obstacles
         )
     """
 
@@ -97,8 +106,10 @@ class MPPIPlanner:
     def plan(
         self,
         centre_line:        Sequence[tuple[float, float, float]],
-        obstacle_positions: Sequence[tuple[float, float]] = (),
+        obstacle_positions: Sequence = (),
         advance_wps:        float = 0.0,
+        ego_xy:             Optional[tuple[float, float]] = None,
+        ego_speed:          float = 0.0,
     ) -> list[tuple[float, float, float]]:
         cfg = self.cfg
         if not centre_line:
@@ -123,7 +134,11 @@ class MPPIPlanner:
 
         traj_x = cl_x[None, :] + U_k * lat_x[None, :]
         traj_y = cl_y[None, :] + U_k * lat_y[None, :]
-        costs = self._compute_costs(traj_x, traj_y, cl_x, cl_y, cl_yaw, U_k, obstacle_positions)
+        # lead cars (same direction) are followed by the controller, not avoided
+        obs = avoidable(as_obstacle_array(obstacle_positions), cl[:, :2], cl_yaw,
+                        max_offset=cfg.max_lateral_offset, pass_clearance=cfg.pass_clearance_m)
+        times = path_times(cl_x, cl_y, ego_xy, ego_speed) if len(obs) else None
+        costs = self._compute_costs(traj_x, traj_y, cl_x, cl_y, cl_yaw, U_k, obs, times)
 
         # ── Importance-weighted update ───────────────────────────────────
         beta = costs.min()
@@ -166,7 +181,8 @@ class MPPIPlanner:
         cl_x: np.ndarray, cl_y: np.ndarray,           # (H,)
         cl_yaw: np.ndarray,                           # (H,)
         U_k: np.ndarray,                              # (K, H)
-        obstacle_positions: Sequence[tuple[float, float]],
+        obs: np.ndarray,                              # (N, 7)
+        times: Optional[np.ndarray] = None,           # (H,)
     ) -> np.ndarray:
         cfg = self.cfg
         cte = (traj_x - cl_x[None, :]) ** 2 + (traj_y - cl_y[None, :]) ** 2
@@ -174,32 +190,15 @@ class MPPIPlanner:
         costs += cfg.w_smoothness * (np.diff(U_k, axis=1) ** 2).mean(axis=1)
         costs += cfg.w_deviation * (U_k ** 2).mean(axis=1)
 
-        if len(obstacle_positions):
-            obs = np.asarray(obstacle_positions, dtype=float)               # (N, 2)
-            d_eff = footprint_distance(traj_x, traj_y, cl_yaw, obs,
-                                       cfg.obstacle_long_scale)            # (K, H, N)
+        if len(obs):
+            clear = box_clearance(traj_x, traj_y, cl_yaw, obs, cfg.ego_half_length, times,
+                                  long_margin=cfg.obstacle_long_margin_m)  # (K, H, N)
             # Summed over every point near an obstacle (not just the closest
             # one) so the whole stretch alongside it is pushed out, and
             # continuous at d = r so the optimum doesn't sit on the boundary.
-            ratio = cfg.min_clearance_m / np.maximum(d_eff, 1e-3)
+            ratio = cfg.min_clearance_m / np.maximum(clear, 0.05)
             costs += cfg.w_obstacle * np.maximum(ratio ** 2 - 1.0, 0.0).sum(axis=(1, 2))
         return costs
-
-
-def footprint_distance(xs, ys, yaws, obs, long_scale):
-    """
-    Elliptical distance from path points to obstacles, shape (..., H, N).
-
-    Splits the offset into along-path and lateral parts (using the path
-    heading) and divides the along-path part by `long_scale`.
-    """
-    xs, ys = np.asarray(xs, float), np.asarray(ys, float)
-    c, s = np.cos(yaws), np.sin(yaws)
-    dx = xs[..., None] - obs[:, 0]
-    dy = ys[..., None] - obs[:, 1]
-    along = dx * c[..., None] + dy * s[..., None]
-    lat = -dx * s[..., None] + dy * c[..., None]
-    return np.sqrt((along / long_scale) ** 2 + lat ** 2)
 
 
 def _headings(xs: np.ndarray, ys: np.ndarray, fallback: np.ndarray) -> np.ndarray:
