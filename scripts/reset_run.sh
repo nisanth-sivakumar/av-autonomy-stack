@@ -7,6 +7,8 @@
 #   ./scripts/reset_run.sh                  # road_graph planner (default)
 #   ./scripts/reset_run.sh lattice          # lattice planner
 #   ./scripts/reset_run.sh mppi             # road-constrained MPPI
+#   ./scripts/reset_run.sh mppi -45 60      # ...and drive to goal (x, y) in the ROS map
+#                                           # frame (A* route, stops there)
 #
 # Prerequisites: CARLA server running (Windows) and carla_ros_bridge running
 # in another terminal. Can be run from any directory.
@@ -27,6 +29,12 @@ case "$PLANNER_TYPE" in
     road_graph|lattice|mppi) ;;
     *) echo "Unknown planner '$PLANNER_TYPE' (expected road_graph | lattice | mppi)"; exit 1 ;;
 esac
+GOAL_ARGS=()
+if [ $# -ge 3 ]; then
+    GOAL_ARGS=("goal_x:=$2" "goal_y:=$3")
+elif [ $# -eq 2 ]; then
+    echo "Goal needs both coordinates: $0 <planner> <goal_x> <goal_y>"; exit 1
+fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -165,6 +173,7 @@ ros2 bag record \
     /carla/ego_vehicle/lane_invasion \
     /planning/trajectory \
     /perception/obstacles \
+    /perception/objects \
     /perception/lane_offset &
 BAG_PID=$!
 
@@ -195,7 +204,7 @@ fi
 # ---- Planner -------------------------------------------------------------
 
 echo "==> Launching planner (type: $PLANNER_TYPE)..."
-ros2 launch av_planning planner.launch.py planner_type:="$PLANNER_TYPE" &
+ros2 launch av_planning planner.launch.py planner_type:="$PLANNER_TYPE" "${GOAL_ARGS[@]}" &
 PLANNER_PID=$!
 if ! wait_for_msg /planning/trajectory nav_msgs/msg/Path 30; then
     abort "no /planning/trajectory after 30 s — check the planner output above."
@@ -213,7 +222,7 @@ CTRL_PID=$!
 cat <<EOF
 
 ==> Run started.
-    Planner     : $PLANNER_TYPE
+    Planner     : $PLANNER_TYPE${GOAL_ARGS:+   goal: ${GOAL_ARGS[*]}}
     Bag         : $BAG_PATH
     PIDs        : spawn=$SPAWN_PID perception=$PERCEP_PID planner=$PLANNER_PID controller=$CTRL_PID bag=$BAG_PID
 
