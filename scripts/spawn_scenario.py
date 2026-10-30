@@ -28,12 +28,20 @@ ignores them and perception detects them like any other vehicle.
 
 Without --keep the cars stay until Ctrl+C and are destroyed on exit.
 
+Moving lead car (CARLA version of the offline "lead" scenario):
+    python3 scripts/spawn_scenario.py custom --distance 45 --lateral 0 --speed 1.5 --travel 25
+    # then ./scripts/reset_run.sh <planner> in another terminal
+The car waits (braked) until the ego starts moving, then drives straight
+ahead at constant velocity for --travel metres and stops.  It does not
+steer, so place it on a straight with that much road ahead.
+
 Lateral convention: + = LEFT of the lane centre (same as the planners).
 """
 
 import argparse
 import json
 import math
+import signal
 import sys
 import time
 from pathlib import Path
@@ -81,7 +89,7 @@ def walk_route(start_wp, distance_m: float, step_m: float = 1.0):
 
 
 def find_ego(world):
-    for a in world.get_actors().filter("vehicle.*"):
+    for a in fresh_actors(world).filter("vehicle.*"):
         if a.attributes.get("role_name") in ("ego_vehicle", "hero"):
             return a
     return None
@@ -109,11 +117,32 @@ def match_heading(wp, carla_yaw_deg: float):
     return wp
 
 
+def fresh_actors(world):
+    """
+    Actor list after the next tick.  A new client's first get_actors() can be
+    empty or stale in synchronous mode until it has seen a tick — `--clear`
+    silently missed cars because of this.
+    """
+    try:
+        world.wait_for_tick(5.0)
+    except RuntimeError:
+        pass   # no tick within 5 s (bridge stalled?) — use what we have
+    return world.get_actors()
+
+
+def remove(actor):
+    try:
+        actor.disable_constant_velocity()    # persists after this script exits otherwise
+    except RuntimeError:
+        pass
+    actor.destroy()
+
+
 def clear(world) -> int:
     n = 0
-    for a in world.get_actors().filter("vehicle.*"):
+    for a in fresh_actors(world).filter("vehicle.*"):
         if a.attributes.get("role_name") == ROLE:
-            a.destroy()
+            remove(a)
             n += 1
     return n
 
@@ -132,8 +161,16 @@ def main():
     ap.add_argument("--host", default="172.25.80.1")
     ap.add_argument("--port", type=int, default=2000)
     ap.add_argument("--keep", action="store_true", help="leave the cars when this script exits")
+    ap.add_argument("--speed", type=float, default=0.0,
+                    help="make the car a lead vehicle: drive at this speed (m/s) once the ego moves")
+    ap.add_argument("--travel", type=float, default=25.0,
+                    help="lead vehicle: metres to drive before stopping (default 25)")
+    ap.add_argument("--start-now", action="store_true",
+                    help="lead vehicle: start driving immediately (testing) instead of waiting for the ego")
     ap.add_argument("--clear", action="store_true", help="destroy previously spawned scenario cars")
     args = ap.parse_args()
+    # SIGTERM (e.g. from a script) must clean up like Ctrl+C does
+    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
 
     client = carla.Client(args.host, args.port)
     client.set_timeout(10.0)
@@ -189,6 +226,11 @@ def main():
 
     if not spawned:
         sys.exit(1)
+    if args.speed > 0.0:
+        if args.keep:
+            print("--speed needs this script to keep running; ignoring --keep.")
+        drive_lead(world, spawned[0], args.speed, args.travel, args.start_now)
+        return
     if args.keep:
         print("Kept. Remove later with:  python3 scripts/spawn_scenario.py --clear")
         return
@@ -201,8 +243,41 @@ def main():
         pass
     finally:
         for a in spawned:
-            a.destroy()
+            remove(a)
         print("Scenario car(s) removed.")
+
+
+def drive_lead(world, car, speed, travel, start_now=False):
+    """Hold the car until the ego moves, then drive it ahead at `speed` for `travel` m."""
+    print(f"Lead vehicle armed: waits for the ego to move, then {speed:.1f} m/s for {travel:.0f} m. "
+          "Ctrl+C to remove it.", flush=True)
+    try:
+        while not start_now:
+            ego = find_ego(world)
+            if ego is not None:
+                v = ego.get_velocity()
+                if (v.x ** 2 + v.y ** 2) ** 0.5 > 0.5:
+                    break
+            time.sleep(0.2)
+        # A just-spawned actor reports (0, 0, 0) until the world has ticked;
+        # taking that as the start made the travel check pass instantly.
+        world.wait_for_tick(5.0)
+        start = car.get_location()
+        car.apply_control(carla.VehicleControl(hand_brake=False, brake=0.0))
+        car.enable_constant_velocity(carla.Vector3D(speed, 0.0, 0.0))   # car's local x = forward
+        print("Lead vehicle driving.", flush=True)
+        while car.get_location().distance(start) < travel:
+            time.sleep(0.2)
+        car.disable_constant_velocity()
+        car.apply_control(carla.VehicleControl(hand_brake=True, brake=1.0))
+        print(f"Lead vehicle stopped after {travel:.0f} m (parked; Ctrl+C to remove).", flush=True)
+        while True:
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        remove(car)
+        print("Lead vehicle removed.", flush=True)
 
 
 if __name__ == "__main__":
