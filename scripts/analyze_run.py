@@ -94,6 +94,27 @@ def signed_cte(px, py, path_xy: np.ndarray) -> float:
     return float(math.copysign(dist[i], cross))
 
 
+def covered_cte(px, py, path_xy: np.ndarray, max_dist: float = 3.0):
+    """
+    Signed distance to the path if the car is *beside* it (its closest
+    point is not the path's first vertex from behind), else None.
+    """
+    if len(path_xy) < 2:
+        return None
+    a, b = path_xy[:-1], path_xy[1:]
+    ab = b - a
+    ab_len2 = np.maximum((ab ** 2).sum(axis=1), 1e-12)
+    p = np.array([px, py])
+    t_raw = ((p - a) * ab).sum(axis=1) / ab_len2
+    t = np.clip(t_raw, 0.0, 1.0)
+    dist = np.linalg.norm(p - (a + t[:, None] * ab), axis=1)
+    i = int(np.argmin(dist))
+    if (i == 0 and t_raw[0] < 0.0) or dist[i] > max_dist:
+        return None
+    cross = ab[i, 0] * (py - a[i, 1]) - ab[i, 1] * (px - a[i, 0])
+    return float(math.copysign(dist[i], cross))
+
+
 def compute_jerk(steer_series, timestamps):
     """RMS of the steering-command rate (1/s). Lower = smoother."""
     if len(steer_series) < 2:
@@ -110,15 +131,20 @@ def count_events(times, gap_s=1.0):
     return int(1 + np.sum(np.diff(t) > gap_s))
 
 
+DERIVED_MSGS_DIR = Path("/opt/ros/humble/share/derived_object_msgs/msg")
+
+
 def make_typestore():
+    """Humble types plus carla_msgs (ros-bridge) and derived_object_msgs (/perception/objects)."""
     typestore = get_typestore(Stores.ROS2_HUMBLE)
-    if CARLA_MSGS_DIR.is_dir():
+    for pkg, msg_dir in (("carla_msgs", CARLA_MSGS_DIR), ("derived_object_msgs", DERIVED_MSGS_DIR)):
+        if not msg_dir.is_dir():
+            print(f"  WARNING: {msg_dir} not found — {pkg} topics unreadable")
+            continue
         types = {}
-        for f in sorted(CARLA_MSGS_DIR.glob("*.msg")):
-            types.update(get_types_from_msg(f.read_text(), f"carla_msgs/msg/{f.stem}"))
+        for f in sorted(msg_dir.glob("*.msg")):
+            types.update(get_types_from_msg(f.read_text(), f"{pkg}/msg/{f.stem}"))
         typestore.register(types)
-    else:
-        print(f"  WARNING: {CARLA_MSGS_DIR} not found — carla_msgs topics unreadable")
     return typestore
 
 
@@ -154,7 +180,8 @@ def read_bag(bag_path: Path) -> dict:
             if topic == ODOM_TOPIC:
                 p, q, v = msg.pose.pose.position, msg.pose.pose.orientation, msg.twist.twist.linear
                 data["odom"].append({
-                    "t": t, "x": p.x, "y": p.y,
+                    "t": t, "t_sim": msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9,
+                    "x": p.x, "y": p.y,
                     "yaw_deg": math.degrees(quat_to_yaw(q.x, q.y, q.z, q.w)),
                     "speed": math.hypot(v.x, v.y),
                 })
@@ -205,14 +232,27 @@ def analyze(bag_path: Path, output_dir: Path, show: bool):
         print(f"\n  WARNING: {jumps} odometry jumps — more than one 'ego_vehicle' was publishing.\n"
               "  Metrics below mix both vehicles. Restart CARLA or destroy the stale actor.\n")
 
-    # ── CTE vs the planned trajectory active at each odom sample ──────────
+    # ── CTE vs the planned trajectory at each odom sample ─────────────────
+    # Plans start up to one waypoint (3 m) ahead of the car.  Extrapolating
+    # the first segment backwards misreads the car as being inside the
+    # curve in tight turns, so use the most recent plan that passes beside
+    # the car (plans overlap from tick to tick), falling back to the
+    # extrapolation only if none does.
     cte = np.full(len(odom), np.nan)
     if data["traj"]:
         traj_t = np.array([t for t, _ in data["traj"]])
         for i, row in enumerate(odom.itertuples()):
             j = int(np.searchsorted(traj_t, row.t, side="right")) - 1
-            if j >= 0 and len(data["traj"][j][1]) >= 2:
-                cte[i] = signed_cte(row.x, row.y, data["traj"][j][1])
+            if j < 0:
+                continue
+            for k in range(j, max(-1, j - 50), -1):
+                c = covered_cte(row.x, row.y, data["traj"][k][1])
+                if c is not None:
+                    cte[i] = c
+                    break
+            else:
+                if len(data["traj"][j][1]) >= 2:
+                    cte[i] = signed_cte(row.x, row.y, data["traj"][j][1])
     odom["cte"] = cte
 
     # ── Nearest perceived obstacle at each odom sample ────────────────────
@@ -253,6 +293,8 @@ def analyze(bag_path: Path, output_dir: Path, show: bool):
     metrics = {
         "Odometry jumps (multi-ego)":    str(jumps),
         "Run duration (s)":              fmt(float(odom["t"].iloc[-1]), ".1f"),
+        # the stack runs on simulated time; CARLA may run faster than real time
+        "Simulated duration (s)":        fmt(float(odom["t_sim"].iloc[-1] - odom["t_sim"].iloc[0]), ".1f"),
         "Distance driven (m)":           fmt(total_dist, ".1f"),
         "Mean speed (m/s)":              fmt(float(odom["speed"].mean()), ".2f"),
         "Max speed (m/s)":               fmt(float(odom["speed"].max()), ".2f"),
