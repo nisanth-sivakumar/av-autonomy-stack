@@ -13,9 +13,15 @@ The camera image is rendered from the true lane geometry (offline_road) with
 the same intrinsics/mount as config/objects.json (400×200, fov 90, x=2, z=2,
 pitched 20° down).
 
+It also publishes /clock (the stack runs on simulated time).  The clock
+runs from the start; the vehicle is held until the first trajectory
+arrives, and at that moment the wall-clock epoch for moving scenario
+obstacles is written to $OFFLINE_SIM_EPOCH (see offline_road.py).
+
 At the end it writes a JSON report with ground-truth metrics:
 cross-track error vs lane centre, distance travelled, minimum distance to
-obstacles, collisions, and perception lane-offset error.
+obstacles, collisions, distance to the goal, and perception lane-offset
+error.
 
 Usage:  python3 sim_node.py --duration 35 --out result.json
 (PYTHONPATH must contain scripts/offline_sim/fake_carla.)
@@ -24,6 +30,8 @@ Usage:  python3 sim_node.py --duration 35 --out result.json
 import argparse
 import json
 import math
+import os
+import time
 
 import cv2
 import numpy as np
@@ -32,6 +40,7 @@ from rclpy.node import Node
 from nav_msgs.msg import Odometry, Path
 from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import Float32
+from rosgraph_msgs.msg import Clock
 from carla_msgs.msg import CarlaEgoVehicleControl
 
 import offline_road as road
@@ -44,22 +53,24 @@ CAM_X, CAM_Z = 2.0, 2.0
 CAM_PITCH = math.radians(20.0)      # looking down, as in config/objects.json
 ROAD_LINE_BGRA = (50, 234, 157, 255)
 ROAD_BGRA = (128, 64, 128, 255)
-# Collision if the two footprints overlap (road frame, both cars aligned
-# with the lane): Model 3 is 4.7 × 1.85 m, the obstacle car ~4.0 × 1.7 m.
-COLLISION_LONG = (4.7 + 4.0) / 2
-COLLISION_LAT = (1.85 + 1.7) / 2
+# Collision if the footprints overlap (road frame, both cars aligned with
+# the lane).  Model 3: 4.7 × 1.85 m; obstacle size from the scenario.
+EGO_HALF_LENGTH, EGO_HALF_WIDTH = 4.7 / 2, 1.85 / 2
 
 
 class SimNode(Node):
-    def __init__(self, duration, start_s):
+    def __init__(self, duration, start_s, goal_s=None):
         super().__init__("offline_sim")
         self.duration = duration
         x, y, yaw = road.pose_at(start_s)
         self.x, self.y, self.yaw, self.v = x, y, yaw, 0.0
         self.cmd = (0.0, 0.0, 0.0)
         self.t = 0.0
-        self.obstacles = road.load_obstacles()
-        self.obstacles_sl = [road.project(ox, oy) for ox, oy in self.obstacles]
+        self.obstacle_specs = road.obstacle_specs()
+        self.goal_s = goal_s
+        self.clock_t = 0.0
+        self.epoch_path = os.environ.get("OFFLINE_SIM_EPOCH")
+        self.min_gap_lead = float("inf")      # bumper gap to obstacles ahead in the lane
 
         self.f = CAM_W / (2.0 * math.tan(math.radians(CAM_FOV) / 2.0))
         self.cx, self.cy = CAM_W / 2.0, CAM_H / 2.0
@@ -78,6 +89,7 @@ class SimNode(Node):
         self.stopped_time = 0.0
 
         self.odom_pub = self.create_publisher(Odometry, "/carla/ego_vehicle/odometry", 10)
+        self.clock_pub = self.create_publisher(Clock, "/clock", 10)
         self.img_pub = self.create_publisher(
             Image, "/carla/ego_vehicle/semantic_segmentation_front/image", 1)
         self.info_pub = self.create_publisher(
@@ -104,13 +116,24 @@ class SimNode(Node):
         self.traj_msgs += 1
 
     # ── dynamics + metrics ───────────────────────────────────────────────
+    def _publish_clock(self):
+        self.clock_t += DT
+        msg = Clock()
+        msg.clock.sec = int(self.clock_t)
+        msg.clock.nanosec = int((self.clock_t % 1.0) * 1e9)
+        self.clock_pub.publish(msg)
+
     def _step(self):
         if self.done:
             return
+        self._publish_clock()
         if self.traj_msgs == 0:
-            # Hold time until the stack is up (first trajectory received)
+            # Hold the vehicle until the stack is up (first trajectory received)
             self._publish_odom()
             return
+        if self.t == 0.0 and self.epoch_path:
+            with open(self.epoch_path, "w") as f:      # moving obstacles start now
+                f.write(repr(time.time()))
         throttle, steer, brake = self.cmd
         acc = 3.0 * throttle - 7.0 * brake - 0.05 * self.v
         self.v = max(0.0, self.v + acc * DT)
@@ -128,11 +151,18 @@ class SimNode(Node):
         self.max_speed = max(self.max_speed, self.v)
         if self.v < 0.05:
             self.stopped_time += DT
-        if self.obstacles:
-            d = min(math.hypot(self.x - ox, self.y - oy) for ox, oy in self.obstacles)
-            self.min_obs = min(self.min_obs, d)
-            hit = any(abs(s - os_) < COLLISION_LONG and abs(lateral - ol) < COLLISION_LAT
-                      for os_, ol in self.obstacles_sl)
+        if self.obstacle_specs:
+            hit = False
+            for spec in self.obstacle_specs:
+                st = road.obstacle_state(spec, road.elapsed())
+                self.min_obs = min(self.min_obs, math.hypot(self.x - st["x"], self.y - st["y"]))
+                ds, dl = st["s"] - s, st["lateral"] - lateral
+                if abs(ds) < EGO_HALF_LENGTH + spec["half_length"] and \
+                        abs(dl) < EGO_HALF_WIDTH + spec["half_width"]:
+                    hit = True
+                if ds > 0 and abs(dl) < EGO_HALF_WIDTH + spec["half_width"]:
+                    self.min_gap_lead = min(
+                        self.min_gap_lead, ds - EGO_HALF_LENGTH - spec["half_length"])
             if hit and not self.in_collision:
                 self.collisions += 1
             self.in_collision = hit
@@ -208,6 +238,8 @@ class SimNode(Node):
             "mean_abs_cte_m": round(float(cte.mean()), 3),
             "max_abs_cte_m": round(float(cte.max()), 3),
             "min_obstacle_dist_m": None if math.isinf(self.min_obs) else round(self.min_obs, 2),
+            "min_lead_gap_m": None if math.isinf(self.min_gap_lead) else round(self.min_gap_lead, 2),
+            "goal_error_m": None if self.goal_s is None else round(self.final_s - self.goal_s, 2),
             "collisions": self.collisions,
             "stopped_time_s": round(self.stopped_time, 2),
             "trajectory_msgs": self.traj_msgs,
@@ -222,10 +254,11 @@ def main():
     ap.add_argument("--duration", type=float, default=35.0)
     ap.add_argument("--start-s", type=float, default=5.0)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--goal-s", type=float, default=None, help="goal arc length (for the report)")
     args = ap.parse_args()
 
     rclpy.init()
-    node = SimNode(args.duration, args.start_s)
+    node = SimNode(args.duration, args.start_s, args.goal_s)
     try:
         while rclpy.ok() and not node.done:
             rclpy.spin_once(node, timeout_sec=0.1)

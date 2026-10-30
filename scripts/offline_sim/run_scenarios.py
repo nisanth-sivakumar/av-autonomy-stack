@@ -26,12 +26,13 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
-# name → (obstacles, duration_s, checks(result, planner) → list of failures)
+# name → spec: scenario JSON for offline_road (radius, obstacles), duration,
+# optional goal arc length, and checks(result, planner) → list of failures
 SCENARIOS = {
-    # Straight → 90° left curve, empty road: lane keeping + perception accuracy
-    "curve": (
-        [], 35.0,
-        lambda r, p: _expect(r, [
+    # Straight → 90° left curve (R 30 m), empty road: lane keeping + perception
+    "curve": dict(
+        scenario={}, duration=35.0,
+        check=lambda r, p: _expect(r, [
             ("collisions", r["collisions"] == 0),
             ("progress > 75 m", r["final_s_m"] > 75),
             ("max |CTE| < 0.6 m", r["max_abs_cte_m"] < 0.6),
@@ -39,27 +40,56 @@ SCENARIOS = {
             ("lane-offset mean err < 0.3 m", (r["lane_offset_mean_abs_err_m"] or 9) < 0.3),
         ]),
     ),
+    # Junction-like 90° turn with R 10 m: adaptive lookahead keeps CTE down
+    "tight": dict(
+        scenario={"radius": 10.0}, duration=30.0,
+        check=lambda r, p: _expect(r, [
+            ("collisions", r["collisions"] == 0),
+            ("progress > 60 m", r["final_s_m"] > 60),
+            ("max |CTE| < 0.6 m", r["max_abs_cte_m"] < 0.6),
+        ]),
+    ),
     # Car parked in the middle of the lane on the straight: every planner must stop
-    "blocked": (
-        [{"s": 28.0, "lateral": 0.0}], 25.0,
-        lambda r, p: _expect(r, [
+    "blocked": dict(
+        scenario={"obstacles": [{"s": 28.0, "lateral": 0.0}]}, duration=25.0,
+        check=lambda r, p: _expect(r, [
             ("collisions", r["collisions"] == 0),
             ("stopped", r["final_speed_mps"] < 0.1),
-            ("stopped ≥ 4.5 m short (centres)", r["min_obstacle_dist_m"] >= 4.5),
-            ("stopped ≤ 12 m short", r["min_obstacle_dist_m"] <= 12.0),
+            ("bumper gap ≥ 2 m", (r["min_lead_gap_m"] or 0) >= 2.0),
+            ("bumper gap ≤ 6 m", (r["min_lead_gap_m"] or 99) <= 6.0),
         ]),
     ),
     # Car parked 1.0 m left of centre on the curve: lattice/MPPI pass it,
     # road_graph (no avoidance) must stop.
-    "partial": (
-        [{"s": 50.0, "lateral": 1.0}], 40.0,
-        lambda r, p: _expect(r, [
+    "partial": dict(
+        scenario={"obstacles": [{"s": 50.0, "lateral": 1.0}]}, duration=40.0,
+        check=lambda r, p: _expect(r, [
             ("collisions", r["collisions"] == 0),
         ] + ([
             ("stopped", r["final_speed_mps"] < 0.1),
         ] if p == "road_graph" else [
             ("passed the obstacle", r["final_s_m"] > 60),
         ])),
+    ),
+    # Slower lead car (1.5 m/s) in the lane: follow it, don't stop or swerve
+    "lead": dict(
+        scenario={"obstacles": [{"s": 25.0, "lateral": 0.0, "speed": 1.5}]}, duration=40.0,
+        check=lambda r, p: _expect(r, [
+            ("collisions", r["collisions"] == 0),
+            ("kept a gap ≥ 2 m", (r["min_lead_gap_m"] or 0) >= 2.0),
+            ("kept following (progress > 45 m)", r["final_s_m"] > 45),
+            ("still moving", r["final_speed_mps"] > 0.8),
+            ("stayed in lane (max |CTE| < 0.6 m)", r["max_abs_cte_m"] < 0.6),
+        ]),
+    ),
+    # Goal on the curve: route there and stop on it
+    "goal": dict(
+        scenario={}, duration=35.0, goal_s=60.0,
+        check=lambda r, p: _expect(r, [
+            ("collisions", r["collisions"] == 0),
+            ("stopped", r["final_speed_mps"] < 0.1),
+            ("stopped within 2 m of the goal", abs(r["goal_error_m"]) <= 2.0),
+        ]),
     ),
 }
 
@@ -68,22 +98,37 @@ def _expect(r, checks):
     return [name for name, ok in checks if not ok]
 
 
+def _goal_args(goal_s, scenario):
+    """planner.launch.py goal_x/goal_y for a goal at arc length goal_s."""
+    if "radius" in scenario:
+        raise ValueError("goal scenarios assume the default road radius")
+    sys.path.insert(0, str(HERE / "fake_carla"))
+    import offline_road   # default radius: OFFLINE_SIM_SCENARIO is unset in this process
+    x, y = offline_road.point_at(goal_s, 0.0)
+    return [f"goal_x:={x:.3f}", f"goal_y:={y:.3f}"]
+
+
 def run_one(planner, scenario, workdir, verbose):
-    obstacles, duration, check = SCENARIOS[scenario]
+    spec = SCENARIOS[scenario]
+    duration, check, goal_s = spec["duration"], spec["check"], spec.get("goal_s")
     scen_file = workdir / f"{scenario}.json"
-    scen_file.write_text(json.dumps({"obstacles": obstacles}))
+    scen_file.write_text(json.dumps(spec["scenario"]))
+    epoch_file = workdir / f"{planner}_{scenario}.epoch"
+    epoch_file.unlink(missing_ok=True)
     out = workdir / f"{planner}_{scenario}.json"
     log = open(workdir / f"{planner}_{scenario}.log", "w")
 
     env = dict(os.environ)
     env["PYTHONPATH"] = f"{HERE / 'fake_carla'}:{env.get('PYTHONPATH', '')}"
     env["OFFLINE_SIM_SCENARIO"] = str(scen_file)
+    env["OFFLINE_SIM_EPOCH"] = str(epoch_file)
     env["ROS_DOMAIN_ID"] = env.get("OFFLINE_SIM_DOMAIN_ID", "77")
     env["PYTHONUNBUFFERED"] = "1"
 
     cmds = [
         ["ros2", "launch", "av_perception", "perception.launch.py"],
-        ["ros2", "launch", "av_planning", "planner.launch.py", f"planner_type:={planner}"],
+        ["ros2", "launch", "av_planning", "planner.launch.py", f"planner_type:={planner}"]
+        + (_goal_args(goal_s, spec["scenario"]) if goal_s is not None else []),
         ["ros2", "launch", "av_control", "controller.launch.py"],
     ]
     procs = [subprocess.Popen(c, env=env, stdout=log, stderr=subprocess.STDOUT,
@@ -91,7 +136,7 @@ def run_one(planner, scenario, workdir, verbose):
     try:
         sim = subprocess.run(
             [sys.executable, str(HERE / "sim_node.py"), "--duration", str(duration),
-             "--out", str(out)],
+             "--out", str(out)] + (["--goal-s", str(goal_s)] if goal_s is not None else []),
             env=env, stdout=log, stderr=subprocess.STDOUT, timeout=duration + 60,
         )
     finally:
@@ -139,13 +184,18 @@ def main():
                 if args.verbose or failed:
                     print("   " + json.dumps(result))
 
-    print("\nplanner     scenario  progress  max|CTE|  min_obs  coll  lane_err  final_v")
+    print("\nplanner     scenario  progress  max|CTE|  min_obs  coll  lane_err  final_v  gap/goal")
     for planner, scenario, r in rows:
         mo = r["min_obstacle_dist_m"]
         le = r["lane_offset_mean_abs_err_m"]
+        extra = ""
+        if r.get("goal_error_m") is not None:
+            extra = f"goal {r['goal_error_m']:+.1f}m"
+        elif r.get("min_lead_gap_m") is not None:
+            extra = f"gap {r['min_lead_gap_m']:.1f}m"
         print(f"{planner:<11} {scenario:<9} {r['final_s_m']:>7.1f}m {r['max_abs_cte_m']:>7.2f}m "
               f"{'   -   ' if mo is None else f'{mo:>6.1f}m'} {r['collisions']:>4}  "
-              f"{'   -   ' if le is None else f'{le:>6.2f}m'}  {r['final_speed_mps']:>5.2f}")
+              f"{'   -   ' if le is None else f'{le:>6.2f}m'}  {r['final_speed_mps']:>5.2f}  {extra}")
     print(f"\n{'ALL PASSED' if not failures else f'{failures} FAILED'}")
     sys.exit(1 if failures else 0)
 
