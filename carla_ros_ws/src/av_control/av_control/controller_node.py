@@ -25,9 +25,10 @@ Longitudinal
 speed limit = min(target_speed, obstacle limit, end-of-path limit)
   - obstacle limit: stop `stop_distance_m` short of the nearest obstacle box
     whose current or predicted position is within `corridor_half_width_m` of
-    the planned path (v = sqrt(2·a·(gap − stop))).  A lead vehicle moving away
-    is credited with its own stopping distance, so the ego follows it rather
-    than stopping.  The planners steer around obstacles; this is the fallback.
+    the planned path (v = sqrt(2·a·(gap − stop))).  A moving lead vehicle is
+    followed at a time gap (gap = stop + T·v_lead) instead, capped by the
+    braking limit credited with the lead's own stopping distance.  The
+    planners steer around obstacles; this is the fallback.
     The gap is median-filtered and a stop is held until the obstacle is clear
     (ObstacleSpeedGovernor).
   - end-of-path limit: stop `end_stop_margin_m` before the last waypoint.  Normal
@@ -75,7 +76,6 @@ from av_control.pure_pursuit import (
     pure_pursuit_steer,
     adaptive_lookahead,
     obstacle_along_path,
-    effective_gap,
     path_length_ahead,
     obstacle_speed_limit,
     speed_command,
@@ -117,6 +117,8 @@ class PurePursuitController(Node):
         self.declare_parameter("obstacle_filter_window", 5)     # median over N control ticks
         self.declare_parameter("obstacle_timeout",       1.0)   # s; drop stale obstacle lists
         self.declare_parameter("obstacle_predict_s",     4.0)   # max prediction horizon
+        self.declare_parameter("follow_time_gap_s",      1.0)   # lead car: gap = stop + T·v_lead
+        self.declare_parameter("follow_gain",            0.5)   # 1/s, gap-error → speed
 
         # End of path (goal / dead end)
         self.declare_parameter("end_stop_margin_m",   1.0)
@@ -144,6 +146,8 @@ class PurePursuitController(Node):
             comfort_decel=self._p("comfort_decel"),
             resume_margin=self._p("resume_margin_m"),
             window=self._p("obstacle_filter_window"),
+            follow_time_gap=self._p("follow_time_gap_s"),
+            follow_gain=self._p("follow_gain"),
         )
 
         self._pushing_since: float | None = None   # throttle>0 but not moving
@@ -278,8 +282,8 @@ class PurePursuitController(Node):
                 ego_speed=speed,
                 max_predict_s=self._p("obstacle_predict_s"),
             )
-        gap = effective_gap(hit[0], hit[1], decel) if hit else None
-        obstacle_limit = self._governor.update(gap, target_speed)
+        obstacle_limit = self._governor.update(
+            hit[0] if hit else None, target_speed, lead_speed=hit[1] if hit else 0.0)
         end_limit = obstacle_speed_limit(
             path_length_ahead(px, py, self._waypoints), target_speed,
             self._p("end_stop_margin_m"), decel,

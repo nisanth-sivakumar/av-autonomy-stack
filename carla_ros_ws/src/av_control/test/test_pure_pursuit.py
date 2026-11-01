@@ -177,3 +177,25 @@ def test_slow_velocity_noise_does_not_sweep_parked_car_into_corridor():
     # parked car in the adjacent lane with 0.3 m/s of velocity noise toward us
     parked = (20.0, 3.5, 0.0, 2.2, 0.9, 0.0, -0.3)
     assert obstacle_along_path(0, 0, 0, STRAIGHT, [parked], 1.35, ego_speed=3.0) is None
+
+
+# ── Lead-car following ───────────────────────────────────────────────────────
+
+def test_governor_follows_moving_lead_at_time_gap_without_latching():
+    from av_control.pure_pursuit import ObstacleSpeedGovernor
+    g = ObstacleSpeedGovernor(stop_distance=3.5, comfort_decel=2.0, window=1)
+    d_des = 3.5 + 1.0 * 1.5
+    assert g.update(d_des, 3.0, lead_speed=1.5) == pytest.approx(1.5)   # equilibrium
+    assert g.update(d_des + 2.0, 3.0, lead_speed=1.5) > 1.5             # catch up
+    assert g.update(d_des - 1.0, 3.0, lead_speed=1.5) < 1.5             # fall back
+    # noise dips below the stop line: slows, but does not latch a stop
+    assert g.update(3.3, 3.0, lead_speed=1.5) >= 0.0 and not g.holding
+    assert g.update(d_des, 3.0, lead_speed=1.5) == pytest.approx(1.5)
+
+
+def test_governor_switches_to_stop_and_hold_when_lead_parks():
+    from av_control.pure_pursuit import ObstacleSpeedGovernor
+    g = ObstacleSpeedGovernor(stop_distance=3.5, comfort_decel=2.0, window=1)
+    g.update(6.0, 3.0, lead_speed=1.5)
+    assert g.update(3.4, 3.0, lead_speed=0.0) == 0.0 and g.holding
+    assert g.update(4.5, 3.0, lead_speed=0.0) == 0.0                    # held until resume line

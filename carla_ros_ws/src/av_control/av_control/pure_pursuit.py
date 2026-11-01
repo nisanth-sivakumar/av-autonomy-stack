@@ -259,31 +259,64 @@ def speed_command(
 
 class ObstacleSpeedGovernor:
     """
-    Obstacle-aware speed limit with noise filtering and restart hysteresis.
+    Obstacle-aware speed limit with noise filtering, hysteresis and following.
 
-    Perceived obstacle positions carry per-frame noise, so the raw
-    arc-length distance jitters.  This applies a median over the last
-    `window` samples, and once the vehicle has been commanded to stop it
-    only releases when the filtered distance exceeds
-    `stop_distance + resume_margin` — avoiding stop/creep oscillation at
-    the stop line.
+    Perceived obstacle positions and speeds carry per-frame noise, so both
+    the gap and the obstacle's speed along the path are median-filtered
+    over the last `window` samples.
+
+    Stationary obstacle (filtered speed < `moving_threshold`): stop
+    `stop_distance` short, and once stopped hold until every recent sample
+    is clear or beyond `stop_distance + resume_margin` — no stop/creep
+    oscillation at the stop line.
+
+    Moving lead: track a time-gap following distance
+        d_des = stop_distance + follow_time_gap · v_lead
+        v     = v_lead + follow_gain · (gap − d_des)
+    capped by the braking limit (crediting the lead's own stopping
+    distance), and never latched.  Applying the stop-and-hold law to a
+    moving lead put the equilibrium right on the stop line, so noise
+    triggered stop-and-go (found by the offline `lead` scenario).
     """
 
     def __init__(self, stop_distance: float, comfort_decel: float,
-                 resume_margin: float = 2.0, window: int = 5):
+                 resume_margin: float = 2.0, window: int = 5,
+                 follow_time_gap: float = 1.0, follow_gain: float = 0.5,
+                 moving_threshold: float = 0.5):
         self.stop_distance = stop_distance
         self.comfort_decel = comfort_decel
         self.resume_margin = resume_margin
         self.window = max(1, int(window))
+        self.follow_time_gap = follow_time_gap
+        self.follow_gain = follow_gain
+        self.moving_threshold = moving_threshold
         self._hist: list[float] = []
+        self._speed_hist: list[float] = []
         self.holding = False
 
-    def update(self, obstacle_dist: Optional[float], target_speed: float) -> float:
-        """Return the speed limit for this tick given the raw obstacle distance."""
+    def update(self, obstacle_dist: Optional[float], target_speed: float,
+               lead_speed: float = 0.0) -> float:
+        """
+        Return the speed limit for this tick.
+
+        obstacle_dist : raw gap to the obstacle (None = clear)
+        lead_speed    : its speed along the path (> 0 = moving away)
+        """
         self._hist.append(math.inf if obstacle_dist is None else obstacle_dist)
         self._hist = self._hist[-self.window:]
+        self._speed_hist.append(0.0 if obstacle_dist is None else lead_speed)
+        self._speed_hist = self._speed_hist[-self.window:]
         filtered = sorted(self._hist)[len(self._hist) // 2]
         dist = None if math.isinf(filtered) else filtered
+        v_lead = sorted(self._speed_hist)[len(self._speed_hist) // 2]
+
+        if dist is not None and v_lead >= self.moving_threshold:
+            self.holding = False
+            d_des = self.stop_distance + self.follow_time_gap * v_lead
+            v_follow = v_lead + self.follow_gain * (dist - d_des)
+            v_safe = obstacle_speed_limit(dist + v_lead ** 2 / (2.0 * self.comfort_decel),
+                                          target_speed, self.stop_distance, self.comfort_decel)
+            return max(0.0, min(target_speed, v_follow, v_safe))
 
         if self.holding:
             # Release only when *every* recent sample is clear or beyond the
