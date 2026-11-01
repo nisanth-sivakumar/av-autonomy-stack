@@ -11,3 +11,6 @@ __pycache__/
 /log/
 # recorded runs
 bags/
+
+# Windows "downloaded file" markers copied into WSL alongside files
+*:Zone.Identifier
