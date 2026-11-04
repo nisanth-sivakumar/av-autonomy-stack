@@ -3,7 +3,11 @@ Synthetic road + scenario shared by the fake `carla` module and sim_node.
 
 Geometry is defined in the ROS map frame (x forward, y left):
     straight 30 m along +x  →  90° left arc, radius R  →  straight 200 m along +y
-One driving lane, 3.5 m wide, driving direction = increasing arc length s.
+Lanes are 3.5 m wide.  The ego drives along increasing arc length s in the
+lane at lateral 0.  "lanes" in the scenario selects the layout:
+    "single"   : one lane (lane_id -1)
+    "same"     : ego lane -2, plus a same-direction lane -1 3.5 m to its left
+    "oncoming" : ego lane -1, plus an oncoming lane +1 3.5 m to its left
 
 The scenario is read from the JSON file named by OFFLINE_SIM_SCENARIO:
     {
@@ -11,6 +15,8 @@ The scenario is read from the JSON file named by OFFLINE_SIM_SCENARIO:
       "obstacles": [
         {"s": 45.0, "lateral": 0.0,                     # + = left of centre
          "speed": 0.0,                                  # optional, along the lane (m/s)
+         "oncoming": false,                             # optional, drives towards -s
+         "trigger_speed": 6.0,                          # optional, speed after the trigger
          "half_length": 2.0, "half_width": 0.85}        # optional (Audi A2-ish)
       ]
     }
@@ -18,6 +24,9 @@ The scenario is read from the JSON file named by OFFLINE_SIM_SCENARIO:
 Moving obstacles share a time base across processes (perception, planner,
 sim): sim_node writes the wall-clock time at which the ego starts driving
 to the file named by OFFLINE_SIM_EPOCH, and obstacle s = s0 + speed·t.
+It writes the time at which the ego first leaves its lane (|lateral| >
+0.5 m, i.e. a lane change starts) to OFFLINE_SIM_TRIGGER; obstacles with
+"trigger_speed" switch to that speed then (used to close a gap mid-change).
 """
 
 import json
@@ -45,6 +54,13 @@ ARC = RADIUS * math.pi / 2
 STRAIGHT_2 = 200.0
 LENGTH = STRAIGHT_1 + ARC + STRAIGHT_2
 LANE_WIDTH = 3.5
+LAYOUTS = {
+    "single": {-1: 0.0},
+    "same": {-2: 0.0, -1: LANE_WIDTH},
+    "oncoming": {-1: 0.0, 1: LANE_WIDTH},
+}
+LANES = LAYOUTS[scenario().get("lanes", "single")]     # lane_id → lateral offset
+EGO_LANE_ID = min(LANES, key=lambda k: abs(LANES[k]))   # the lane at lateral 0
 
 
 def pose_at(s: float) -> tuple[float, float, float]:
@@ -100,6 +116,8 @@ def obstacle_specs() -> list[dict]:
             "speed": float(o.get("speed", 0.0)),
             "half_length": float(o.get("half_length", 2.0)),
             "half_width": float(o.get("half_width", 0.85)),
+            "oncoming": bool(o.get("oncoming", False)),
+            "trigger_speed": o.get("trigger_speed"),
         })
     return out
 
@@ -116,18 +134,42 @@ def elapsed() -> float:
         return 0.0
 
 
-def obstacle_state(spec: dict, t: float) -> dict:
-    """Obstacle pose and velocity at time t (ROS frame)."""
-    s = min(LENGTH, spec["s"] + spec["speed"] * t)
+def trigger_elapsed() -> float:
+    """Seconds since the trigger (ego left its lane), or None if not triggered."""
+    path = os.environ.get("OFFLINE_SIM_TRIGGER")
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            return max(0.0, time.time() - float(f.read().strip()))
+    except (OSError, ValueError):
+        return None
+
+
+def obstacle_state(spec: dict, t: float, t_trig: float = None) -> dict:
+    """Obstacle pose and velocity at time t (ROS frame); t_trig = time since trigger."""
+    v = spec["speed"]
+    travelled = v * t
+    if spec.get("trigger_speed") is not None and t_trig is not None:
+        t_trig = min(t_trig, t)
+        travelled = v * (t - t_trig) + float(spec["trigger_speed"]) * t_trig
+        v = float(spec["trigger_speed"])
+    sign = -1.0 if spec.get("oncoming") else 1.0
+    s = max(0.0, min(LENGTH, spec["s"] + sign * travelled))
     x, y = point_at(s, spec["lateral"])
     _, _, yaw = pose_at(s)
-    moving = spec["speed"] > 0 and s < LENGTH
-    v = spec["speed"] if moving else 0.0
+    if spec.get("oncoming"):
+        yaw += math.pi
+    moving = v > 0 and 0.0 < s < LENGTH
+    v = v if moving else 0.0
     return {"s": s, "lateral": spec["lateral"], "x": x, "y": y, "yaw": yaw,
             "vx": v * math.cos(yaw), "vy": v * math.sin(yaw)}
 
 
+def obstacle_now(spec: dict) -> dict:
+    return obstacle_state(spec, elapsed(), trigger_elapsed())
+
+
 def load_obstacles() -> list[tuple[float, float]]:
     """Obstacle centres (ROS frame) right now."""
-    t = elapsed()
-    return [(st["x"], st["y"]) for st in (obstacle_state(o, t) for o in obstacle_specs())]
+    return [(st["x"], st["y"]) for st in (obstacle_now(o) for o in obstacle_specs())]

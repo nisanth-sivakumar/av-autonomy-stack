@@ -52,39 +52,58 @@ class Transform:
 
 
 class Waypoint:
+    """A point on one lane.  Same-direction lanes (lane_id < 0) run along +s,
+    oncoming lanes (lane_id > 0) along −s, like OpenDRIVE right-hand traffic."""
+
     lane_type = LaneType.Driving
-    # one road, one section, one lane (driving direction = increasing s)
-    road_id, section_id, lane_id = 1, 0, -1
+    road_id, section_id = 1, 0
     is_junction = False
     lane_width = road.LANE_WIDTH
 
-    def __init__(self, s):
+    def __init__(self, s, lane_id=None):
         self.s = s
-        x, y, yaw = road.pose_at(s)
+        self.lane_id = road.EGO_LANE_ID if lane_id is None else lane_id
+        x, y = road.point_at(s, road.LANES[self.lane_id])
+        _, _, yaw = road.pose_at(s)
+        if self.lane_id > 0:
+            yaw += math.pi
         # ROS → CARLA: y and yaw negated
         self.transform = Transform(Location(x, -y, 0.0), Rotation(yaw=-math.degrees(yaw)))
 
     def next(self, distance):
-        if self.s + distance > road.LENGTH:
+        s = self.s + (distance if self.lane_id < 0 else -distance)
+        if not 0.0 <= s <= road.LENGTH:
             return []
-        return [Waypoint(self.s + distance)]
+        return [Waypoint(s, self.lane_id)]
 
+    def _neighbour(self, step):
+        nid = self.lane_id + step
+        if nid == 0:
+            nid += step
+        return Waypoint(self.s, nid) if nid in road.LANES else None
+
+    # CARLA's left/right are relative to the lane's own direction
     def get_left_lane(self):
-        return None
+        return self._neighbour(+1 if self.lane_id < 0 else -1)
 
     def get_right_lane(self):
-        return None
+        return self._neighbour(-1 if self.lane_id < 0 else +1)
 
 
 class Map:
     name = "OfflineSimRoad"
 
     def get_waypoint(self, location, project_to_road=True, lane_type=None):
-        s, _ = road.project(location.x, -location.y)
-        return Waypoint(s)
+        s, lateral = road.project(location.x, -location.y)
+        lane = min(road.LANES, key=lambda k: abs(road.LANES[k] - lateral))
+        return Waypoint(s, lane)
 
     def get_topology(self):
-        return [(Waypoint(0.0), Waypoint(road.LENGTH))]
+        segs = []
+        for lane in road.LANES:
+            a, b = (0.0, road.LENGTH) if lane < 0 else (road.LENGTH, 0.0)
+            segs.append((Waypoint(a, lane), Waypoint(b, lane)))
+        return segs
 
 
 class Actor:
@@ -98,7 +117,7 @@ class Actor:
         self.bounding_box = BoundingBox(Vector3D(spec["half_length"], spec["half_width"], 0.75))
 
     def _state(self):
-        return road.obstacle_state(self._spec, road.elapsed())
+        return road.obstacle_now(self._spec)
 
     def get_transform(self):
         st = self._state()
