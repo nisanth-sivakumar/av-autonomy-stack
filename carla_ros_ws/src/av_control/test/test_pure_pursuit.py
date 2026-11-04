@@ -199,3 +199,15 @@ def test_governor_switches_to_stop_and_hold_when_lead_parks():
     g.update(6.0, 3.0, lead_speed=1.5)
     assert g.update(3.4, 3.0, lead_speed=0.0) == 0.0 and g.holding
     assert g.update(4.5, 3.0, lead_speed=0.0) == 0.0                    # held until resume line
+
+
+def test_heading_corridor_catches_lead_the_plan_has_already_left():
+    # mid lane change: the plan is in the left lane, the car still half behind the lead
+    plan = [(float(x), 3.5) for x in range(2, 60, 3)]
+    lead = car(6.5, 0.0, vx=1.0)
+    kw = dict(corridor_half_width=1.35, ego_half_length=2.4)
+    assert obstacle_along_path(0, 1.5, 0, plan, [lead], **kw) is None          # plan only
+    gap, _ = obstacle_along_path(0, 1.5, 0, plan, [lead], heading_check_m=4.5, **kw)
+    assert gap == pytest.approx(6.5 - 2.2 - 2.4)
+    # once the car is in the target lane the lead no longer blocks
+    assert obstacle_along_path(0, 3.3, 0, plan, [lead], heading_check_m=4.5, **kw) is None

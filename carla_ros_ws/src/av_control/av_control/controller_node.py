@@ -117,6 +117,8 @@ class PurePursuitController(Node):
         self.declare_parameter("obstacle_filter_window", 5)     # median over N control ticks
         self.declare_parameter("obstacle_timeout",       1.0)   # s; drop stale obstacle lists
         self.declare_parameter("obstacle_predict_s",     4.0)   # max prediction horizon
+        # straight corridor ahead of the actual pose (the car lags the plan)
+        self.declare_parameter("heading_check_m",        4.5)
         self.declare_parameter("follow_time_gap_s",      1.0)   # lead car: gap = stop + T·v_lead
         self.declare_parameter("follow_gain",            0.5)   # 1/s, gap-error → speed
 
@@ -281,6 +283,7 @@ class PurePursuitController(Node):
                 ego_half_length=self._p("ego_half_length"),
                 ego_speed=speed,
                 max_predict_s=self._p("obstacle_predict_s"),
+                heading_check_m=self._p("heading_check_m"),
             )
         obstacle_limit = self._governor.update(
             hit[0] if hit else None, target_speed, lead_speed=hit[1] if hit else 0.0)

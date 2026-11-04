@@ -37,6 +37,7 @@ def generate_launch_description():
                 'resume_margin_m':        2.0,
                 'obstacle_filter_window': 5,
                 'obstacle_predict_s':     4.0,
+                'heading_check_m':        4.5,    # straight corridor ahead of the actual car
                 'follow_time_gap_s':      1.0,    # lead car: gap = stop + T*v_lead
                 'follow_gain':            0.5,
                 'ego_half_length':        2.40,   # CARLA Model 3 bounding box

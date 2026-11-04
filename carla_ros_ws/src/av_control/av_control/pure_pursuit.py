@@ -95,6 +95,7 @@ def obstacle_along_path(
     min_speed: float = 1.0,
     predict_samples: int = 8,
     moving_threshold: float = 0.5,
+    heading_check_m: float = 0.0,
 ) -> Optional[tuple[float, float]]:
     """
     Return (gap, v_along) for the nearest obstacle blocking the path corridor.
@@ -111,6 +112,13 @@ def obstacle_along_path(
               minus `ego_half_length` (≈ bumper-to-box distance)
     v_along : obstacle velocity along the path direction there
               (> 0 = moving away from the ego, e.g. a lead car)
+
+    heading_check_m > 0 adds a second, short corridor straight ahead of the
+    ego's *actual* pose: from the rear of the car to `heading_check_m` beyond
+    its front bumper.  The path corridor follows the plan, but the car lags
+    it — mid lane change the plan had already left the lead's lane, so the
+    controller sped up while the car was still half behind the lead (1.3 m
+    bumper gaps offline).
 
     Obstacles slower than `moving_threshold` are treated as stationary (so
     velocity noise on parked cars doesn't sweep them into the corridor).
@@ -147,6 +155,18 @@ def obstacle_along_path(
             v_along = vx * ux + vy * uy
             if best is None or gap < best[0]:
                 best = (gap, v_along)
+        if heading_check_m > 0.0:
+            # corridor along the ego's own heading (current position only)
+            a = (ox - px) * hx + (oy - py) * hy
+            lat = -(ox - px) * hy + (oy - py) * hx
+            rel = oyaw - yaw
+            ea = hl * abs(math.cos(rel)) + hw * abs(math.sin(rel))
+            el = hl * abs(math.sin(rel)) + hw * abs(math.cos(rel))
+            if (a > 0.0 and a - ea <= ego_half_length + heading_check_m
+                    and abs(lat) - el <= corridor_half_width):
+                gap = max(0.0, a - ea - ego_half_length)
+                if best is None or gap < best[0]:
+                    best = (gap, vx * hx + vy * hy)
     return best
 
 
