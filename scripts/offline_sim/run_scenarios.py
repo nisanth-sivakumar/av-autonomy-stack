@@ -82,6 +82,63 @@ SCENARIOS = {
             ("stayed in lane (max |CTE| < 0.6 m)", r["max_abs_cte_m"] < 0.6),
         ]),
     ),
+    # ── Phase 4.1: behavior layer (two-lane roads) ──
+    # Slow lead (1.0 m/s) with a free same-direction lane: lattice/MPPI change
+    # lanes and pass; road_graph has no behavior layer and follows.
+    "overtake_slow": dict(
+        scenario={"lanes": "same", "obstacles": [{"s": 25.0, "lateral": 0.0, "speed": 1.0}]},
+        duration=45.0,
+        check=lambda r, p: _expect(r, [
+            ("collisions", r["collisions"] == 0),
+        ] + ([
+            ("no lane change", r["lane_changes"] == 0 and r["max_lateral_m"] < 1.0),
+            ("kept following", r["final_speed_mps"] > 0.5),
+        ] if p == "road_graph" else [
+            ("changed lane", r["lane_changes"] >= 1),
+            ("bumper gap to the lead ≥ 2 m", (r["min_lead_gap_m"] or 99) >= 2.0),
+            ("ends in the left lane", abs(r["final_lateral_m"] - 3.5) < 0.6),
+            ("passed the lead (final s > 75 m)", r["final_s_m"] > 75),
+            ("no abort", r["aborts"] == 0),
+        ])),
+    ),
+    # Same, but a car in the target lane level with the ego: never change.
+    "overtake_blocked": dict(
+        scenario={"lanes": "same", "obstacles": [
+            {"s": 25.0, "lateral": 0.0, "speed": 1.0},
+            {"s": 17.0, "lateral": 3.5, "speed": 1.0}]},
+        duration=40.0,
+        check=lambda r, p: _expect(r, [
+            ("collisions", r["collisions"] == 0),
+            ("no lane change", r["lane_changes"] == 0 and r["max_lateral_m"] < 1.0),
+            ("kept following", r["final_speed_mps"] > 0.5),
+        ]),
+    ),
+    # The car behind in the target lane speeds up to 6 m/s as the ego starts
+    # to leave its lane: abort back, let it pass (a later retry may complete).
+    "overtake_abort": dict(
+        scenario={"lanes": "same", "obstacles": [
+            {"s": 25.0, "lateral": 0.0, "speed": 1.0},
+            {"s": 0.0, "lateral": 3.5, "speed": 1.0, "trigger_speed": 6.0}]},
+        duration=45.0,
+        check=lambda r, p: _expect(r, [
+            ("collisions", r["collisions"] == 0),
+        ] + ([] if p == "road_graph" else [
+            ("aborted", r["aborts"] >= 1),
+            ("bumper gap to the lead ≥ 2 m", (r["min_lead_gap_m"] or 99) >= 2.0),
+            ("body clearance to the passing car ≥ 0.3 m",
+             (r["min_side_clearance_m"] if r["min_side_clearance_m"] is not None else 9) >= 0.3),
+        ])),
+    ),
+    # Slow lead, but the neighbour lane is oncoming: follow, never change.
+    "no_oncoming": dict(
+        scenario={"lanes": "oncoming", "obstacles": [{"s": 25.0, "lateral": 0.0, "speed": 1.0}]},
+        duration=35.0,
+        check=lambda r, p: _expect(r, [
+            ("collisions", r["collisions"] == 0),
+            ("no lane change", r["lane_changes"] == 0 and r["max_lateral_m"] < 1.0),
+            ("kept following", r["final_speed_mps"] > 0.5),
+        ]),
+    ),
     # Goal on the curve: route there and stop on it
     "goal": dict(
         scenario={}, duration=35.0, goal_s=60.0,
@@ -115,6 +172,8 @@ def run_one(planner, scenario, workdir, verbose):
     scen_file.write_text(json.dumps(spec["scenario"]))
     epoch_file = workdir / f"{planner}_{scenario}.epoch"
     epoch_file.unlink(missing_ok=True)
+    trigger_file = workdir / f"{planner}_{scenario}.trigger"
+    trigger_file.unlink(missing_ok=True)
     out = workdir / f"{planner}_{scenario}.json"
     log = open(workdir / f"{planner}_{scenario}.log", "w")
 
@@ -122,6 +181,7 @@ def run_one(planner, scenario, workdir, verbose):
     env["PYTHONPATH"] = f"{HERE / 'fake_carla'}:{env.get('PYTHONPATH', '')}"
     env["OFFLINE_SIM_SCENARIO"] = str(scen_file)
     env["OFFLINE_SIM_EPOCH"] = str(epoch_file)
+    env["OFFLINE_SIM_TRIGGER"] = str(trigger_file)
     env["ROS_DOMAIN_ID"] = env.get("OFFLINE_SIM_DOMAIN_ID", "77")
     env["PYTHONUNBUFFERED"] = "1"
 

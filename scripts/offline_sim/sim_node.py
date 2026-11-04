@@ -39,7 +39,7 @@ import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry, Path
 from sensor_msgs.msg import Image, CameraInfo
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, String
 from rosgraph_msgs.msg import Clock
 from carla_msgs.msg import CarlaEgoVehicleControl
 
@@ -70,6 +70,13 @@ class SimNode(Node):
         self.goal_s = goal_s
         self.clock_t = 0.0
         self.epoch_path = os.environ.get("OFFLINE_SIM_EPOCH")
+        self.trigger_path = os.environ.get("OFFLINE_SIM_TRIGGER")
+        self.triggered = False
+        self.max_lateral = 0.0
+        self.min_side_clearance = float("inf")   # body gap to cars alongside in other lanes
+        self.behavior_states: list[str] = []      # state sequence (changes only)
+        self.lane_changes = 0
+        self.aborts = 0
         self.min_gap_lead = float("inf")      # bumper gap to obstacles ahead in the lane
 
         self.f = CAM_W / (2.0 * math.tan(math.radians(CAM_FOV) / 2.0))
@@ -98,6 +105,7 @@ class SimNode(Node):
             CarlaEgoVehicleControl, "/carla/ego_vehicle/vehicle_control_cmd", self._cmd_cb, 10)
         self.create_subscription(Float32, "/perception/lane_offset", self._lane_cb, 10)
         self.create_subscription(Path, "/planning/trajectory", self._traj_cb, 1)
+        self.create_subscription(String, "/planning/behavior", self._behavior_cb, 10)
 
         self.create_timer(DT, self._step)
         self.create_timer(0.1, self._publish_camera)
@@ -111,6 +119,15 @@ class SimNode(Node):
         self.lane_offset_msgs += 1
         # ground truth: + = ego left of centre
         self.lane_err.append(msg.data - self.last_lateral)
+
+    def _behavior_cb(self, msg):
+        state = msg.data.split()[0].split("=", 1)[-1]
+        if not self.behavior_states or self.behavior_states[-1] != state:
+            if state == "LANE_KEEP" and self.behavior_states and self.behavior_states[-1] == "CHANGING":
+                self.lane_changes += 1
+            if state == "ABORT":
+                self.aborts += 1
+            self.behavior_states.append(state)
 
     def _traj_cb(self, msg):
         self.traj_msgs += 1
@@ -144,7 +161,14 @@ class SimNode(Node):
         self.t += DT
 
         s, lateral = road.project(self.x, self.y)
-        self.last_lateral = lateral
+        # perception measures the offset from the lane the car is in
+        nearest = min(road.LANES.values(), key=lambda l: abs(l - lateral))
+        self.last_lateral = lateral - nearest
+        self.max_lateral = max(self.max_lateral, abs(lateral))
+        if not self.triggered and abs(lateral) > 0.5 and self.trigger_path:
+            self.triggered = True                     # the ego started leaving its lane
+            with open(self.trigger_path, "w") as f:
+                f.write(repr(time.time()))
         self.final_s = s
         if self.t > 3.0:
             self.cte.append(lateral)
@@ -154,7 +178,7 @@ class SimNode(Node):
         if self.obstacle_specs:
             hit = False
             for spec in self.obstacle_specs:
-                st = road.obstacle_state(spec, road.elapsed())
+                st = road.obstacle_now(spec)
                 self.min_obs = min(self.min_obs, math.hypot(self.x - st["x"], self.y - st["y"]))
                 ds, dl = st["s"] - s, st["lateral"] - lateral
                 if abs(ds) < EGO_HALF_LENGTH + spec["half_length"] and \
@@ -163,6 +187,9 @@ class SimNode(Node):
                 if ds > 0 and abs(dl) < EGO_HALF_WIDTH + spec["half_width"]:
                     self.min_gap_lead = min(
                         self.min_gap_lead, ds - EGO_HALF_LENGTH - spec["half_length"])
+                if abs(ds) < EGO_HALF_LENGTH + spec["half_length"]:
+                    self.min_side_clearance = min(
+                        self.min_side_clearance, abs(dl) - EGO_HALF_WIDTH - spec["half_width"])
             if hit and not self.in_collision:
                 self.collisions += 1
             self.in_collision = hit
@@ -201,7 +228,9 @@ class SimNode(Node):
         img = np.zeros((CAM_H, CAM_W, 4), np.uint8)
         img[:, :] = ROAD_BGRA
         s0, _ = road.project(self.x, self.y)
-        for lat in (-road.LANE_WIDTH / 2, road.LANE_WIDTH / 2):
+        boundaries = sorted({l + sgn * road.LANE_WIDTH / 2
+                             for l in road.LANES.values() for sgn in (-1, 1)})
+        for lat in boundaries:
             pts = []
             for ds in np.arange(-2.0, 60.0, 0.2):
                 p = self._project(*road.point_at(s0 + ds, lat))
@@ -244,6 +273,13 @@ class SimNode(Node):
             "stopped_time_s": round(self.stopped_time, 2),
             "trajectory_msgs": self.traj_msgs,
             "lane_offset_msgs": self.lane_offset_msgs,
+            "final_lateral_m": round(road.project(self.x, self.y)[1], 2),
+            "max_lateral_m": round(self.max_lateral, 2),
+            "min_side_clearance_m": None if math.isinf(self.min_side_clearance)
+            else round(self.min_side_clearance, 2),
+            "lane_changes": self.lane_changes,
+            "aborts": self.aborts,
+            "behavior_states": self.behavior_states[-12:],
             "lane_offset_mean_abs_err_m": None if lane is None else round(float(lane.mean()), 3),
             "lane_offset_p90_abs_err_m": None if lane is None else round(float(np.percentile(lane, 90)), 3),
         }
