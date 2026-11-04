@@ -80,6 +80,21 @@ def generate_launch_description():
             'lattice_min_clearance': 1.75,   # → infeasible below
             'lattice_comfort_clearance': 2.35,
 
+            # Behavior layer (lattice / mppi): overtake slow or parked leads by
+            # changing into a same-direction lane (never an oncoming one)
+            'enable_lane_changes':    True,
+            'behavior_target_speed':  3.0,    # = controller target_speed
+            'behavior_slow_ratio':    0.8,
+            'behavior_slow_time_s':   2.0,
+            'behavior_prepare_time_s': 0.5,
+            'behavior_change_time_s': 5.0,    # change length = clamp(5 s x v, 10, 20) m
+            'behavior_min_change_length_m': 10.0,
+            'behavior_max_change_length_m': 20.0,
+            'behavior_cooldown_s':    5.0,
+            'behavior_front_buffer_m': 4.0,
+            'behavior_rear_buffer_m': 4.0,
+            'behavior_rear_time_gap_s': 1.5,
+
             # Perception
             'lane_offset_warn_m':   0.5,
             'obstacle_timeout':     1.0,

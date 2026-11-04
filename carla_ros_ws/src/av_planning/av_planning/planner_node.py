@@ -9,6 +9,7 @@ Subscribes : /carla/ego_vehicle/odometry   (nav_msgs/Odometry)
              /perception/lane_offset       (std_msgs/Float32)
 Publishes  : /planning/trajectory          (nav_msgs/Path)
              /planning/debug/trajectory    (nav_msgs/Path)
+             /planning/behavior            (std_msgs/String: behavior state, lattice/mppi)
 
 Centre line
 -----------
@@ -36,6 +37,14 @@ Planning modes (parameter `planner_type`)
 Obstacles are boxes with velocity; lattice and MPPI keep clearance to
 each box at its predicted position (obstacles.py).
 
+Behavior layer (lattice / mppi, `enable_lane_changes`)
+------------------------------------------------------
+behavior.py decides the reference lane: keep, follow, or change into a
+same-direction neighbour lane (lanes.py) to overtake a slow or parked
+lead, with gap acceptance and abort.  During a change the trajectory
+planners get the blended centre line (1−w)·origin + w·target; when it
+completes, the route switches to the target lane.
+
 Time
 ----
 All timing uses the node clock, which follows /clock when the launch
@@ -60,12 +69,17 @@ from rclpy.qos import (
 )
 from nav_msgs.msg import Odometry, Path
 from geometry_msgs.msg import PoseStamped, PointStamped, PoseArray
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, String
 from derived_object_msgs.msg import ObjectArray
+import numpy as np
+
+from av_planning.behavior import BehaviorConfig, BehaviorPlanner, Lane, SAME
+from av_planning.lanes import neighbour_lane, neighbour_waypoints
 
 from av_planning.lattice_planner import LatticePlanner, LatticeConfig
 from av_planning.mppi_planner import MPPIPlanner, MPPIConfig
-from av_planning.obstacles import Obstacle, DEFAULT_HALF_LENGTH, DEFAULT_HALF_WIDTH
+from av_planning.obstacles import (
+    Obstacle, DEFAULT_HALF_LENGTH, DEFAULT_HALF_WIDTH, as_obstacle_array)
 from av_planning.route_planner import RouteGraph, Segment
 
 try:
@@ -174,6 +188,20 @@ class RoadGraphPlanner(Node):
         # Path must also be laterally clear this far before/after an obstacle
         self.declare_parameter("obstacle_long_margin", 3.0)
 
+        # Behavior layer (lattice / mppi): overtaking by lane change
+        self.declare_parameter("enable_lane_changes",    True)
+        self.declare_parameter("behavior_target_speed",  3.0)   # = controller target_speed
+        self.declare_parameter("behavior_slow_ratio",    0.8)   # lead < ratio × target is slow
+        self.declare_parameter("behavior_slow_time_s",   2.0)
+        self.declare_parameter("behavior_prepare_time_s", 0.5)
+        self.declare_parameter("behavior_change_time_s", 5.0)
+        self.declare_parameter("behavior_min_change_length_m", 10.0)
+        self.declare_parameter("behavior_max_change_length_m", 20.0)
+        self.declare_parameter("behavior_cooldown_s",    5.0)
+        self.declare_parameter("behavior_front_buffer_m", 4.0)
+        self.declare_parameter("behavior_rear_buffer_m", 4.0)
+        self.declare_parameter("behavior_rear_time_gap_s", 1.5)
+
         # Perception integration
         self.declare_parameter("lane_offset_warn_m",   0.5)   # log warn above this drift
         self.declare_parameter("obstacle_timeout",     1.0)   # s; drop stale obstacle lists
@@ -227,6 +255,22 @@ class RoadGraphPlanner(Node):
             obstacle_long_margin_m = p("obstacle_long_margin"),
         ))
 
+        self._behavior = BehaviorPlanner(BehaviorConfig(
+            target_speed        = p("behavior_target_speed"),
+            slow_ratio          = p("behavior_slow_ratio"),
+            slow_time_s         = p("behavior_slow_time_s"),
+            prepare_time_s      = p("behavior_prepare_time_s"),
+            change_time_s       = p("behavior_change_time_s"),
+            min_change_length_m = p("behavior_min_change_length_m"),
+            change_length_m     = p("behavior_max_change_length_m"),
+            cooldown_s          = p("behavior_cooldown_s"),
+            front_buffer_m      = p("behavior_front_buffer_m"),
+            rear_buffer_m       = p("behavior_rear_buffer_m"),
+            rear_time_gap_s     = p("behavior_rear_time_gap_s"),
+            ego_half_length     = p("ego_half_length"),
+        ))
+        self._last_behavior = ""
+
         # ── State ─────────────────────────────────────────────────────────
         self._ego_x:     float | None = None
         self._ego_y:     float | None = None
@@ -269,6 +313,7 @@ class RoadGraphPlanner(Node):
         # ── Publishers ────────────────────────────────────────────────────
         self._traj_pub  = self.create_publisher(Path, "/planning/trajectory",       latched_qos)
         self._debug_pub = self.create_publisher(Path, "/planning/debug/trajectory", latched_qos)
+        self._behavior_pub = self.create_publisher(String, "/planning/behavior", 10)
 
         # ── Subscribers ───────────────────────────────────────────────────
         self.create_subscription(Odometry, "/carla/ego_vehicle/odometry", self._odom_cb, odom_qos)
@@ -341,6 +386,7 @@ class RoadGraphPlanner(Node):
         self._route = []
         self._mppi.reset()
         self._lattice.reset()
+        self._behavior.reset()
         self.get_logger().info(
             f"New goal: ({gx:.1f}, {gy:.1f}) → lane centre ({self._goal[0]:.1f}, {self._goal[1]:.1f})")
 
@@ -432,6 +478,8 @@ class RoadGraphPlanner(Node):
         if self._planner_type in ("mppi", "lattice"):
             # Receding horizon: re-optimise against the latest obstacles every tick
             centre_line = self._get_centre_line(self._ego_x, self._ego_y, self._ego_yaw)
+            if self.get_parameter("enable_lane_changes").value:
+                centre_line = self._apply_behavior(centre_line, obstacles)
             self._trajectory = self._dispatch_planner(centre_line, obstacles)
             if self._tick % 10 == 0:
                 self.get_logger().info(
@@ -452,6 +500,55 @@ class RoadGraphPlanner(Node):
 
         self._tick += 1
         self._publish_trajectory()
+
+    # ── Behavior layer ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _is_driving(wp) -> bool:
+        return wp.lane_type == carla.LaneType.Driving
+
+    def _apply_behavior(self, centre_line, obstacles):
+        """Run the behavior layer; return the centre line to plan around."""
+        if self._carla_map is None or not centre_line or len(self._route) < 2:
+            return centre_line
+        route = self._route                     # [start waypoint] + walked waypoints
+        lanes = {"ego": Lane(np.asarray(centre_line, float), SAME)}
+        for side in ("left", "right"):
+            lanes[side], _ = neighbour_lane(route[1:], side, self._is_driving)
+        out = self._behavior.update(self._now(), (self._ego_x, self._ego_y), self._ego_speed,
+                                    lanes, as_obstacle_array(obstacles))
+        self._publish_behavior(out)
+
+        if out.switch_lane:
+            new_route = neighbour_waypoints(route, out.switch_lane, self._is_driving)
+            if len(new_route) >= 2:
+                self._route = new_route
+                self._mppi.reset()
+                self._lattice.reset()
+                self._last_plan_xy = None
+                self.get_logger().info(f"[behavior] lane change {out.switch_lane} complete")
+                return [(wp_xy(wp)[0], wp_xy(wp)[1], -math.radians(wp.transform.rotation.yaw))
+                        for wp in new_route[1:]]
+        target = lanes.get(out.target) if out.target else None
+        if target is None:
+            return centre_line
+        ego = np.asarray(centre_line, float)
+        n = min(len(ego), len(target.centre))
+        pts = ego[:n, :2]
+        seg = np.hypot(*np.diff(np.vstack([[self._ego_x, self._ego_y], pts]), axis=0).T)
+        w = out.weights(np.cumsum(seg))[:, None]
+        xy = (1.0 - w) * pts + w * target.centre[:n, :2]
+        dx, dy = np.gradient(xy[:, 0]), np.gradient(xy[:, 1])
+        yaw = np.where(np.hypot(dx, dy) > 1e-6, np.arctan2(dy, dx), ego[:n, 2])
+        return [(float(x), float(y), float(a)) for (x, y), a in zip(xy, yaw)]
+
+    def _publish_behavior(self, out):
+        text = (f"state={out.state} target={out.target or '-'} "
+                f"progress={out.progress:.2f} reason={out.reason}")
+        self._behavior_pub.publish(String(data=text))
+        if out.state != self._last_behavior:
+            self.get_logger().info(f"[behavior] {text}")
+            self._last_behavior = out.state
 
     # ── Planner dispatcher ────────────────────────────────────────────────
 
