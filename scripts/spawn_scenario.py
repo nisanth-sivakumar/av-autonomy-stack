@@ -35,6 +35,15 @@ The car waits (braked) until the ego starts moving, then drives straight
 ahead at constant velocity for --travel metres and stops.  It does not
 steer, so place it on a straight with that much road ahead.
 
+Multi-car / neighbour-lane scenarios (Phase 4.1 overtaking):
+    --lane left|right   place the car in the neighbour lane (CARLA's lane graph)
+    --distance -15      negative = behind the reference, in that lane
+    --add               don't remove existing scenario cars first (one
+                        invocation per car; each moving car keeps its own process)
+    --trigger-speed V   a moving car switches to V m/s when the ego first leaves
+                        its lane (> 0.5 m from its centre) — closes the gap
+                        during a lane change (abort scenario)
+
 Lateral convention: + = LEFT of the lane centre (same as the planners).
 """
 
@@ -76,10 +85,14 @@ def lateral_location(wp, lateral_left_m: float) -> "carla.Location":
 
 
 def walk_route(start_wp, distance_m: float, step_m: float = 1.0):
-    """Follow the lane `distance_m` ahead like the planner does (first branch)."""
+    """Follow the lane `distance_m` ahead like the planner does (first branch);
+    a negative distance walks backwards along the lane."""
     wp, travelled, junction = start_wp, 0.0, False
+    backwards = distance_m < 0
+    distance_m = abs(distance_m)
     while travelled < distance_m:
-        nxt = wp.next(min(step_m, distance_m - travelled))
+        step = min(step_m, distance_m - travelled)
+        nxt = wp.previous(step) if backwards else wp.next(step)
         if not nxt:
             return None, travelled, junction
         wp = nxt[0]
@@ -168,6 +181,12 @@ def main():
     ap.add_argument("--start-now", action="store_true",
                     help="lead vehicle: start driving immediately (testing) instead of waiting for the ego")
     ap.add_argument("--clear", action="store_true", help="destroy previously spawned scenario cars")
+    ap.add_argument("--add", action="store_true",
+                    help="keep existing scenario cars (default: remove them first)")
+    ap.add_argument("--lane", choices=("left", "right"),
+                    help="put the car in this neighbour lane of the reference lane")
+    ap.add_argument("--trigger-speed", type=float, default=None,
+                    help="moving car: switch to this speed when the ego first leaves its lane")
     args = ap.parse_args()
     # SIGTERM (e.g. from a script) must clean up like Ctrl+C does
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
@@ -176,7 +195,7 @@ def main():
     client.set_timeout(10.0)
     world = client.get_world()
 
-    removed = clear(world)
+    removed = 0 if args.add and not args.clear else clear(world)
     if removed:
         print(f"Removed {removed} previous scenario car(s).")
     if args.clear:
@@ -210,6 +229,15 @@ def main():
         if wp is None:
             print(f"  road ends after {travelled:.0f} m — cannot place a car at {dist:.0f} m")
             continue
+        if args.lane:
+            nb = wp.get_left_lane() if args.lane == "left" else wp.get_right_lane()
+            if nb is None or nb.lane_type != carla.LaneType.Driving:
+                print(f"  no {args.lane} driving lane at {dist:.0f} m")
+                continue
+            same = (nb.lane_id > 0) == (wp.lane_id > 0)
+            print(f"  {args.lane} neighbour lane {nb.lane_id} "
+                  f"({'same direction' if same else 'ONCOMING'})")
+            wp = nb
         loc = lateral_location(wp, lat)
         loc.z += 0.3
         tf = carla.Transform(loc, wp.transform.rotation)
@@ -229,7 +257,8 @@ def main():
     if args.speed > 0.0:
         if args.keep:
             print("--speed needs this script to keep running; ignoring --keep.")
-        drive_lead(world, spawned[0], args.speed, args.travel, args.start_now)
+        drive_lead(world, spawned[0], args.speed, args.travel, args.start_now,
+                   trigger_speed=args.trigger_speed)
         return
     if args.keep:
         print("Kept. Remove later with:  python3 scripts/spawn_scenario.py --clear")
@@ -247,8 +276,16 @@ def main():
         print("Scenario car(s) removed.")
 
 
-def drive_lead(world, car, speed, travel, start_now=False):
-    """Hold the car until the ego moves, then drive it ahead at `speed` for `travel` m."""
+def ego_left_lane(cmap, ego, lane_id) -> bool:
+    """Has the ego left lane `lane_id` (> 0.5 m from its centre, or another lane)?"""
+    loc = ego.get_location()
+    wp = cmap.get_waypoint(loc, project_to_road=True, lane_type=carla.LaneType.Driving)
+    return wp.lane_id != lane_id or loc.distance(wp.transform.location) > 0.5
+
+
+def drive_lead(world, car, speed, travel, start_now=False, trigger_speed=None):
+    """Hold the car until the ego moves, then drive it ahead at `speed` for `travel` m
+    (switching to `trigger_speed` when the ego first leaves its lane)."""
     print(f"Lead vehicle armed: waits for the ego to move, then {speed:.1f} m/s for {travel:.0f} m. "
           "Ctrl+C to remove it.", flush=True)
     try:
@@ -266,8 +303,15 @@ def drive_lead(world, car, speed, travel, start_now=False):
         car.apply_control(carla.VehicleControl(hand_brake=False, brake=0.0))
         car.enable_constant_velocity(carla.Vector3D(speed, 0.0, 0.0))   # car's local x = forward
         print("Lead vehicle driving.", flush=True)
+        cmap, ego = world.get_map(), find_ego(world)
+        ego_lane = None if ego is None else cmap.get_waypoint(ego.get_location()).lane_id
+        triggered = trigger_speed is None or ego is None
         while car.get_location().distance(start) < travel:
-            time.sleep(0.2)
+            if not triggered and ego_left_lane(cmap, ego, ego_lane):
+                car.enable_constant_velocity(carla.Vector3D(trigger_speed, 0.0, 0.0))
+                print(f"Ego left its lane — now {trigger_speed:.1f} m/s.", flush=True)
+                triggered = True
+            time.sleep(0.1)
         car.disable_constant_velocity()
         car.apply_control(carla.VehicleControl(hand_brake=True, brake=1.0))
         print(f"Lead vehicle stopped after {travel:.0f} m (parked; Ctrl+C to remove).", flush=True)

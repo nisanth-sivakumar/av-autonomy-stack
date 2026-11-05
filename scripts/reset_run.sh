@@ -174,6 +174,7 @@ ros2 bag record \
     /planning/trajectory \
     /perception/obstacles \
     /perception/objects \
+    /planning/behavior \
     /perception/lane_offset &
 BAG_PID=$!
 

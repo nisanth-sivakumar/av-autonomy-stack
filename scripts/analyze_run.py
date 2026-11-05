@@ -56,6 +56,7 @@ LANE_INV_TOPIC = "/carla/ego_vehicle/lane_invasion"
 TRAJ_TOPIC = "/planning/trajectory"
 OBST_TOPIC = "/perception/obstacles"
 LANE_OFF_TOPIC = "/perception/lane_offset"
+BEHAVIOR_TOPIC = "/planning/behavior"
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +135,20 @@ def count_events(times, gap_s=1.0):
 DERIVED_MSGS_DIR = Path("/opt/ros/humble/share/derived_object_msgs/msg")
 
 
+def behavior_metrics(samples) -> dict:
+    """Lane changes, aborts and the state sequence from /planning/behavior."""
+    if not samples:
+        return {"Lane changes / aborts": "n/a (no /planning/behavior)"}
+    seq = []
+    for _, state in samples:
+        if not seq or seq[-1] != state:
+            seq.append(state)
+    changes = sum(1 for a, b in zip(seq, seq[1:]) if a == "CHANGING" and b != "ABORT")
+    aborts = seq.count("ABORT")
+    shown = " > ".join(seq[:8]) + (" > ..." if len(seq) > 8 else "")
+    return {"Lane changes / aborts": f"{changes} / {aborts}", "Behavior states": shown}
+
+
 def make_typestore():
     """Humble types plus carla_msgs (ros-bridge) and derived_object_msgs (/perception/objects)."""
     typestore = get_typestore(Stores.ROS2_HUMBLE)
@@ -155,7 +170,7 @@ def make_typestore():
 def read_bag(bag_path: Path) -> dict:
     typestore = make_typestore()
     data = {k: [] for k in ("odom", "control", "speed", "traj", "obst", "lane",
-                            "collision", "lane_inv")}
+                            "collision", "lane_inv", "behavior")}
     print(f"Reading bag: {bag_path}")
 
     with Reader(bag_path) as reader:
@@ -168,7 +183,7 @@ def read_bag(bag_path: Path) -> dict:
             t = timestamp * 1e-9
             topic = conn.topic
             if topic not in (ODOM_TOPIC, CONTROL_TOPIC, SPEED_TOPIC, TRAJ_TOPIC, OBST_TOPIC,
-                             LANE_OFF_TOPIC, COLLISION_TOPIC, LANE_INV_TOPIC):
+                             LANE_OFF_TOPIC, COLLISION_TOPIC, LANE_INV_TOPIC, BEHAVIOR_TOPIC):
                 continue
             try:
                 msg = typestore.deserialize_cdr(raw, conn.msgtype)
@@ -201,8 +216,11 @@ def read_bag(bag_path: Path) -> dict:
                 data["collision"].append(t)
             elif topic == LANE_INV_TOPIC:
                 data["lane_inv"].append(t)
+            elif topic == BEHAVIOR_TOPIC:
+                data["behavior"].append((t, msg.data.split()[0].split("=", 1)[-1]))
 
-    for k in ("odom", "control", "speed", "traj", "obst", "lane", "collision", "lane_inv"):
+    for k in ("odom", "control", "speed", "traj", "obst", "lane", "collision", "lane_inv",
+              "behavior"):
         print(f"  {k:<10}: {len(data[k])} msgs")
     return data
 
@@ -304,6 +322,7 @@ def analyze(bag_path: Path, output_dir: Path, show: bool):
         "Braking time (%)":              fmt(float((ctl["brake"] > 0.1).mean() * 100) if len(ctl) else None, ".1f"),
         "Collisions (events)":           str(count_events(data["collision"])),
         "Lane invasions (events)":       str(count_events(data["lane_inv"])),
+        **behavior_metrics(data["behavior"]),
         "Min perceived obstacle (m)":    fmt(float(np.nanmin(obs_dist)) if np.isfinite(obs_dist).any() else None, ".2f"),
         "Mean |lane offset| (m)":        fmt(float(lane.abs().mean()) if len(lane) else None),
         # share of odom samples with a lane-offset message within 0.5 s
