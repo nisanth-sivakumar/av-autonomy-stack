@@ -15,8 +15,10 @@ pitched 20° down).
 
 It also publishes /clock (the stack runs on simulated time).  The clock
 runs from the start; the vehicle is held until the first trajectory
-arrives, and at that moment the wall-clock epoch for moving scenario
-obstacles is written to $OFFLINE_SIM_EPOCH (see offline_road.py).
+arrives.  From then on the drive time (simulated seconds) is written to
+$OFFLINE_SIM_CLOCK every step: the time base for moving scenario
+obstacles in every process (see offline_road.py).  --rate N steps the
+simulation N× faster than real time; the nodes follow /clock.
 
 At the end it writes a JSON report with ground-truth metrics:
 cross-track error vs lane centre, distance travelled, minimum distance to
@@ -31,7 +33,6 @@ import argparse
 import json
 import math
 import os
-import time
 
 import cv2
 import numpy as np
@@ -59,17 +60,21 @@ EGO_HALF_LENGTH, EGO_HALF_WIDTH = 4.7 / 2, 1.85 / 2
 
 
 class SimNode(Node):
-    def __init__(self, duration, start_s, goal_s=None):
+    def __init__(self, duration, start_s, goal_s=None, start_lateral=0.0,
+                 start_yaw_deg=0.0, rate=1.0):
         super().__init__("offline_sim")
         self.duration = duration
-        x, y, yaw = road.pose_at(start_s)
+        x, y = road.point_at(start_s, start_lateral)
+        yaw = road.pose_at(start_s)[2] + math.radians(start_yaw_deg)
         self.x, self.y, self.yaw, self.v = x, y, yaw, 0.0
         self.cmd = (0.0, 0.0, 0.0)
         self.t = 0.0
         self.obstacle_specs = road.obstacle_specs()
         self.goal_s = goal_s
         self.clock_t = 0.0
-        self.epoch_path = os.environ.get("OFFLINE_SIM_EPOCH")
+        self.clock_path = os.environ.get("OFFLINE_SIM_CLOCK")
+        self.trace = []                          # [t, s, lateral, v] every 0.5 s
+        self.steps = 0
         self.trigger_path = os.environ.get("OFFLINE_SIM_TRIGGER")
         self.triggered = False
         self.max_lateral = 0.0
@@ -107,8 +112,8 @@ class SimNode(Node):
         self.create_subscription(Path, "/planning/trajectory", self._traj_cb, 1)
         self.create_subscription(String, "/planning/behavior", self._behavior_cb, 10)
 
-        self.create_timer(DT, self._step)
-        self.create_timer(0.1, self._publish_camera)
+        # wall period DT / rate: the stack follows /clock, so it speeds up too
+        self.create_timer(DT / max(rate, 1e-3), self._step)
         self.done = False
 
     # ── inputs ──────────────────────────────────────────────────────────
@@ -144,13 +149,14 @@ class SimNode(Node):
         if self.done:
             return
         self._publish_clock()
+        self.steps += 1
+        if self.steps % 2 == 0:
+            self._publish_camera()               # 10 Hz of simulated time
         if self.traj_msgs == 0:
             # Hold the vehicle until the stack is up (first trajectory received)
             self._publish_odom()
             return
-        if self.t == 0.0 and self.epoch_path:
-            with open(self.epoch_path, "w") as f:      # moving obstacles start now
-                f.write(repr(time.time()))
+
         throttle, steer, brake = self.cmd
         acc = 3.0 * throttle - 7.0 * brake - 0.05 * self.v
         self.v = max(0.0, self.v + acc * DT)
@@ -159,6 +165,11 @@ class SimNode(Node):
         self.x += self.v * math.cos(self.yaw) * DT
         self.y += self.v * math.sin(self.yaw) * DT
         self.t += DT
+        if self.clock_path:                      # shared time base for moving obstacles
+            tmp = self.clock_path + ".tmp"
+            with open(tmp, "w") as f:
+                f.write(repr(self.t))
+            os.replace(tmp, self.clock_path)
 
         s, lateral = road.project(self.x, self.y)
         # perception measures the offset from the lane the car is in
@@ -168,8 +179,11 @@ class SimNode(Node):
         if not self.triggered and abs(lateral) > 0.5 and self.trigger_path:
             self.triggered = True                     # the ego started leaving its lane
             with open(self.trigger_path, "w") as f:
-                f.write(repr(time.time()))
+                f.write(repr(self.t))
         self.final_s = s
+        if self.steps % 10 == 0:                 # coarse trace for diagnosing failures
+            self.trace.append([round(self.t, 1), round(s, 1), round(lateral, 2),
+                               round(self.v, 2)])
         if self.t > 3.0:
             self.cte.append(lateral)
         self.max_speed = max(self.max_speed, self.v)
@@ -268,6 +282,8 @@ class SimNode(Node):
             "max_abs_cte_m": round(float(cte.max()), 3),
             "min_obstacle_dist_m": None if math.isinf(self.min_obs) else round(self.min_obs, 2),
             "min_lead_gap_m": None if math.isinf(self.min_gap_lead) else round(self.min_gap_lead, 2),
+            "trace": self.trace,
+            "obstacle_final_s_m": [round(road.obstacle_now(o)["s"], 2) for o in self.obstacle_specs],
             "goal_error_m": None if self.goal_s is None else round(self.final_s - self.goal_s, 2),
             "collisions": self.collisions,
             "stopped_time_s": round(self.stopped_time, 2),
@@ -291,10 +307,14 @@ def main():
     ap.add_argument("--start-s", type=float, default=5.0)
     ap.add_argument("--out", required=True)
     ap.add_argument("--goal-s", type=float, default=None, help="goal arc length (for the report)")
+    ap.add_argument("--start-lateral", type=float, default=0.0, help="start offset, m (+ left)")
+    ap.add_argument("--start-yaw-deg", type=float, default=0.0, help="start heading error")
+    ap.add_argument("--rate", type=float, default=1.0, help="simulated seconds per wall second")
     args = ap.parse_args()
 
     rclpy.init()
-    node = SimNode(args.duration, args.start_s, args.goal_s)
+    node = SimNode(args.duration, args.start_s, args.goal_s, args.start_lateral,
+                   args.start_yaw_deg, args.rate)
     try:
         while rclpy.ok() and not node.done:
             rclpy.spin_once(node, timeout_sec=0.1)

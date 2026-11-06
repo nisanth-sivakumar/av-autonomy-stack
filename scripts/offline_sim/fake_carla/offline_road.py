@@ -21,18 +21,20 @@ The scenario is read from the JSON file named by OFFLINE_SIM_SCENARIO:
       ]
     }
 
-Moving obstacles share a time base across processes (perception, planner,
-sim): sim_node writes the wall-clock time at which the ego starts driving
-to the file named by OFFLINE_SIM_EPOCH, and obstacle s = s0 + speed·t.
-It writes the time at which the ego first leaves its lane (|lateral| >
-0.5 m, i.e. a lane change starts) to OFFLINE_SIM_TRIGGER; obstacles with
-"trigger_speed" switch to that speed then (used to close a gap mid-change).
+Moving obstacles share a *simulated* time base across processes
+(perception, planner, sim): sim_node writes the drive time (simulated
+seconds since the ego started driving) to the file named by
+OFFLINE_SIM_CLOCK every step, and obstacle s = s0 + speed·t.  Being on
+simulated time, the whole loop can run faster than real time
+(sim_node --rate).  It writes the drive time at which the ego first leaves
+its lane (|lateral| > 0.5 m, i.e. a lane change starts) to
+OFFLINE_SIM_TRIGGER; obstacles with "trigger_speed" switch to that speed
+then (used to close a gap mid-change).
 """
 
 import json
 import math
 import os
-import time
 
 _SPEC_CACHE = None
 
@@ -122,28 +124,33 @@ def obstacle_specs() -> list[dict]:
     return out
 
 
-def elapsed() -> float:
-    """Seconds since the ego started driving (0 before that)."""
-    path = os.environ.get("OFFLINE_SIM_EPOCH")
+def _read_time(env: str):
+    path = os.environ.get(env)
     if not path or not os.path.exists(path):
-        return 0.0
+        return None
     try:
         with open(path) as f:
-            return max(0.0, time.time() - float(f.read().strip()))
+            return float(f.read().strip())
     except (OSError, ValueError):
-        return 0.0
+        return None          # mid-write: caller falls back
+
+
+_last_clock = 0.0
+
+
+def elapsed() -> float:
+    """Simulated seconds since the ego started driving (0 before that)."""
+    global _last_clock
+    t = _read_time("OFFLINE_SIM_CLOCK")
+    if t is not None:
+        _last_clock = max(0.0, t)
+    return _last_clock
 
 
 def trigger_elapsed() -> float:
-    """Seconds since the trigger (ego left its lane), or None if not triggered."""
-    path = os.environ.get("OFFLINE_SIM_TRIGGER")
-    if not path or not os.path.exists(path):
-        return None
-    try:
-        with open(path) as f:
-            return max(0.0, time.time() - float(f.read().strip()))
-    except (OSError, ValueError):
-        return None
+    """Simulated seconds since the trigger (ego left its lane), or None."""
+    t_trig = _read_time("OFFLINE_SIM_TRIGGER")
+    return None if t_trig is None else max(0.0, elapsed() - t_trig)
 
 
 def obstacle_state(spec: dict, t: float, t_trig: float = None) -> dict:
