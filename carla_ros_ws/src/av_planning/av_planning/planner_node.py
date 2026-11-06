@@ -73,7 +73,8 @@ from std_msgs.msg import Float32, String
 from derived_object_msgs.msg import ObjectArray
 import numpy as np
 
-from av_planning.behavior import BehaviorConfig, BehaviorPlanner, Lane, SAME
+from av_planning.behavior import (
+    ABORT, CHANGING, BehaviorConfig, BehaviorPlanner, Lane, SAME)
 from av_planning.lanes import neighbour_lane, neighbour_waypoints
 
 from av_planning.lattice_planner import LatticePlanner, LatticeConfig
@@ -655,6 +656,11 @@ class RoadGraphPlanner(Node):
         if not self._route:
             return None
         max_dev = self.get_parameter("route_max_deviation_m").value
+        if self._behavior.state in (CHANGING, ABORT):
+            # Mid lane change the car is up to a lane width off its route by
+            # design; re-projecting then snapped the route into the target
+            # lane before the change completed (sweep: abort at progress 1.0).
+            max_dev += 3.5
         pts = [wp_xy(wp) for wp in self._route]
         dists = [math.hypot(px - ros_x, py - ros_y) for px, py in pts]
         i = min(range(len(pts)), key=dists.__getitem__)

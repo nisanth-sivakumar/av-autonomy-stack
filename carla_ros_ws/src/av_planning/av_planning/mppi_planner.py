@@ -192,7 +192,8 @@ class MPPIPlanner:
 
         if len(obs):
             clear = box_clearance(traj_x, traj_y, cl_yaw, obs, cfg.ego_half_length, times,
-                                  long_margin=cfg.obstacle_long_margin_m)  # (K, H, N)
+                                  long_margin=cfg.obstacle_long_margin_m,
+                                  ref=(np.stack([cl_x, cl_y], axis=1), cl_yaw))  # (K, H, N)
             # Summed over every point near an obstacle (not just the closest
             # one) so the whole stretch alongside it is pushed out, and
             # continuous at d = r so the optimum doesn't sit on the boundary.

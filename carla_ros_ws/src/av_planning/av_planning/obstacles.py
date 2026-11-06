@@ -31,7 +31,12 @@ car with 0.16 m to spare.
 Moving obstacles
 ----------------
 With `times` (seconds until the ego reaches each path point), each moving
-obstacle is first moved to where it will be then: o + v·t.
+obstacle is first moved to where it will be then.  Given the reference
+path (`ref`, the lane centre line) the prediction is constant velocity in
+its frame (`predict_along`): along-path and lateral speed are kept, so a
+car following its lane round a curve stays in its lane.  Without `ref` it
+is a straight line, o + v·t — on a curve that swept an oncoming car in the
+inner lane across the ego's lane, and the planners swerved away from it.
   - Obstacles slower than `moving_threshold` are treated as stationary, so
     velocity noise on parked cars is not extrapolated into drift.
   - For moving obstacles, path points the ego reaches after `max_time` are
@@ -113,9 +118,37 @@ def path_times(xs: Sequence[float], ys: Sequence[float], ego_xy: Optional[tuple]
     return s / max(ego_speed, min_speed)
 
 
+def predict_along(obs: np.ndarray, ref_xy: np.ndarray, ref_yaw: np.ndarray,
+                  times: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Obstacle poses at `times` (H,), constant velocity in the frame of the
+    reference path: returns x, y, yaw, each (H, N).  Beyond the path's ends
+    the path is extended straight.
+    """
+    ref_xy = np.asarray(ref_xy, float)
+    ref_yaw = np.unwrap(np.asarray(ref_yaw, float))
+    S = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(ref_xy, axis=0).T))])
+    ox, oy, oyaw, _, _, vx, vy = (obs[:, i] for i in range(7))
+    j = np.hypot(ref_xy[None, :, 0] - ox[:, None], ref_xy[None, :, 1] - oy[:, None]).argmin(axis=1)
+    c, s = np.cos(ref_yaw[j]), np.sin(ref_yaw[j])
+    dx, dy = ox - ref_xy[j, 0], oy - ref_xy[j, 1]
+    s0 = S[j] + dx * c + dy * s
+    lat0 = -dx * s + dy * c
+    v_al, v_lat = vx * c + vy * s, -vx * s + vy * c
+    t = np.asarray(times, float)[:, None]                              # (H, 1)
+    st = s0 + v_al * t                                                 # (H, N)
+    lt = lat0 + v_lat * t
+    sc = np.clip(st, S[0], S[-1])
+    yaw = np.interp(sc, S, ref_yaw)
+    x = np.interp(sc, S, ref_xy[:, 0]) + (st - sc) * np.cos(yaw)       # straight past the ends
+    y = np.interp(sc, S, ref_xy[:, 1]) + (st - sc) * np.sin(yaw)
+    return x - lt * np.sin(yaw), y + lt * np.cos(yaw), oyaw + (yaw - ref_yaw[j])
+
+
 def box_clearance(xs, ys, yaws, obs: np.ndarray, ego_half_length: float,
                   times: Optional[np.ndarray] = None, max_time: float = 6.0,
-                  moving_threshold: float = 0.5, long_margin: float = 0.0) -> np.ndarray:
+                  moving_threshold: float = 0.5, long_margin: float = 0.0,
+                  ref: Optional[tuple] = None) -> np.ndarray:
     """
     Clearance between the ego (centred on each path point) and each
     obstacle box, shape (..., H, N).  See module docstring.
@@ -123,6 +156,8 @@ def box_clearance(xs, ys, yaws, obs: np.ndarray, ego_half_length: float,
     xs, ys, yaws : (..., H) path points and headings
     obs          : (N, 7) from as_obstacle_array
     times        : (H,) or (..., H) seconds until the ego reaches each point
+    ref          : optional (ref_xy (M, 2), ref_yaw (M,)) reference path for
+                   path-frame prediction (needs times of shape (H,))
     """
     xs = np.asarray(xs, float)
     ys = np.asarray(ys, float)
@@ -133,8 +168,14 @@ def box_clearance(xs, ys, yaws, obs: np.ndarray, ego_half_length: float,
     beyond = None
     if times is not None:
         t = np.broadcast_to(np.asarray(times, float), xs.shape)[..., None]
-        ox = ox + np.where(moving, vx, 0.0) * t
-        oy = oy + np.where(moving, vy, 0.0) * t
+        if ref is not None and np.ndim(times) == 1 and len(ref[0]) >= 2:
+            px, py, pyaw = predict_along(obs, ref[0], ref[1], times)   # (H, N)
+            ox = np.where(moving, px, ox)
+            oy = np.where(moving, py, oy)
+            oyaw = np.where(moving, pyaw, oyaw)
+        else:
+            ox = ox + np.where(moving, vx, 0.0) * t
+            oy = oy + np.where(moving, vy, 0.0) * t
         beyond = (t > max_time) & moving                              # (..., H, N)
 
     c, s = np.cos(yaws)[..., None], np.sin(yaws)[..., None]

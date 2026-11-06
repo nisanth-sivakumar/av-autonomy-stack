@@ -138,7 +138,8 @@ class LatticePlanner:
         for c in candidates:
             pts = np.asarray([(x, y) for x, y, _ in c.waypoints])
             min_d = _min_clearance_per_obstacle(pts, cl[:, 2], obs, self.cfg.ego_half_length,
-                                                times, self.cfg.obstacle_long_margin_m)
+                                                times, self.cfg.obstacle_long_margin_m,
+                                                ref=(cl[:, :2], cl[:, 2]))
             c.feasible = bool(min_d.size == 0 or min_d.min() >= self.cfg.min_clearance_m)
             c.min_clearance = float(min_d.min()) if min_d.size else float("inf")
             c.cost = self._score(c, pts, min_d)
@@ -239,12 +240,13 @@ class LatticePlanner:
 # ---------------------------------------------------------------------------
 
 def _min_clearance_per_obstacle(pts: np.ndarray, yaws: np.ndarray, obs: np.ndarray,
-                                ego_half_length: float, times, long_margin: float) -> np.ndarray:
+                                ego_half_length: float, times, long_margin: float,
+                                ref=None) -> np.ndarray:
     """Minimum ego-to-box clearance along the path for each obstacle, shape (N,)."""
     if obs.size == 0 or pts.size == 0:
         return np.empty(0)
     return box_clearance(pts[:, 0], pts[:, 1], yaws, obs, ego_half_length, times,
-                         long_margin=long_margin).min(axis=0)
+                         long_margin=long_margin, ref=ref).min(axis=0)
 
 
 def _headings(xs: np.ndarray, ys: np.ndarray, fallback: np.ndarray) -> np.ndarray:

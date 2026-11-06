@@ -278,3 +278,22 @@ def test_long_margin_extends_the_clear_stretch():
     assert box_clearance([-6.0], [0.0], [0.0], obs, 2.35)[0, 0] > 1.0
     # ...but with a 3 m margin that point must be laterally clear too
     assert box_clearance([-6.0], [0.0], [0.0], obs, 2.35, long_margin=3.0)[0, 0] == 0.0
+
+
+def test_oncoming_car_on_a_curve_stays_in_its_lane_with_ref():
+    from av_planning.obstacles import box_clearance
+    R = 30.0
+    th = np.arange(0, 80) / R
+    ref_xy = np.stack([R * np.sin(th), R * (1 - np.cos(th))], axis=1)    # left arc, ego lane
+    ref_yaw = th
+    a = 25.0 / R                                                          # 25 m ahead,
+    ox, oy = (R - 3.5) * np.sin(a), R - (R - 3.5) * np.cos(a)            # inner (oncoming) lane
+    yaw = a + np.pi
+    obs = np.array([[ox, oy, yaw, 2.2, 0.9, 4 * np.cos(yaw), 4 * np.sin(yaw)]])
+    times = np.arange(80) / 2.0                                           # ego at 2 m/s
+    kw = dict(times=times, max_time=6.0, long_margin=3.0)
+    straight = box_clearance(ref_xy[:, 0], ref_xy[:, 1], ref_yaw, obs, 2.4, **kw).min()
+    along = box_clearance(ref_xy[:, 0], ref_xy[:, 1], ref_yaw, obs, 2.4,
+                          ref=(ref_xy, ref_yaw), **kw).min()
+    assert straight < 1.0                   # the tangent prediction crosses our lane
+    assert along == pytest.approx(3.5 - 0.9, abs=0.1)
