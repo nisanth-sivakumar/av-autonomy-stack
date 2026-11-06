@@ -9,6 +9,8 @@
 #   ./scripts/reset_run.sh mppi             # road-constrained MPPI
 #   ./scripts/reset_run.sh mppi -45 60      # ...and drive to goal (x, y) in the ROS map
 #                                           # frame (A* route, stops there)
+#   EGO_SPAWN="x,y,z,roll,pitch,yaw" ./scripts/reset_run.sh lattice
+#                                           # spawn elsewhere (ROS frame, as in objects.json)
 #
 # Prerequisites: CARLA server running (Windows) and carla_ros_bridge running
 # in another terminal. Can be run from any directory.
@@ -182,9 +184,15 @@ BAG_PID=$!
 # Passed explicitly: the launch file's default is the *installed* copy, which
 # only changes when carla_spawn_objects is rebuilt.
 
-echo "==> Spawning objects (config/objects.json)..."
+SPAWN_ARGS=()
+if [ -n "${EGO_SPAWN:-}" ]; then
+    SPAWN_ARGS=("spawn_point_ego_vehicle:=$EGO_SPAWN")
+    echo "==> Spawning objects (config/objects.json, ego at $EGO_SPAWN)..."
+else
+    echo "==> Spawning objects (config/objects.json)..."
+fi
 ros2 launch carla_spawn_objects carla_spawn_objects.launch.py \
-    objects_definition_file:="$REPO_ROOT/config/objects.json" &
+    objects_definition_file:="$REPO_ROOT/config/objects.json" "${SPAWN_ARGS[@]}" &
 SPAWN_PID=$!
 if ! wait_for_msg /carla/ego_vehicle/odometry nav_msgs/msg/Odometry 30; then
     abort "no ego odometry 30 s after spawning (is the bridge ticking? see the bridge terminal)."

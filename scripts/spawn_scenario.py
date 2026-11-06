@@ -49,6 +49,7 @@ Lateral convention: + = LEFT of the lane centre (same as the planners).
 
 import argparse
 import json
+import os
 import math
 import signal
 import sys
@@ -109,7 +110,12 @@ def find_ego(world):
 
 
 def ego_spawn_location() -> "carla.Location":
-    """Ego spawn point from config/objects.json (ROS frame → CARLA: y negated)."""
+    """Ego spawn point: $EGO_SPAWN ("x,y,z,roll,pitch,yaw", as reset_run.sh takes it)
+    or config/objects.json, both in the ROS frame (→ CARLA: y and yaw negated)."""
+    override = os.environ.get("EGO_SPAWN")
+    if override:
+        x, y, z, _, _, yaw = (float(v) for v in override.split(","))
+        return carla.Location(x=x, y=-y, z=z), -yaw
     spec = json.loads(OBJECTS_JSON.read_text())
     for obj in spec["objects"]:
         if obj.get("id") == "ego_vehicle" and "spawn_point" in obj:
