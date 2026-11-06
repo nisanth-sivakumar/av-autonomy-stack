@@ -54,6 +54,7 @@ Coordinate conventions
 """
 
 import math
+from typing import Optional
 
 import rclpy
 from rclpy.executors import ExternalShutdownException
@@ -116,6 +117,8 @@ class PurePursuitController(Node):
         self.declare_parameter("resume_margin_m",        2.0)   # extra clearance to restart
         self.declare_parameter("obstacle_filter_window", 5)     # median over N control ticks
         self.declare_parameter("obstacle_timeout",       1.0)   # s; drop stale obstacle lists
+        # no (fresh) perception = unknown, not clear: hold until it arrives
+        self.declare_parameter("require_perception",     True)
         self.declare_parameter("obstacle_predict_s",     4.0)   # max prediction horizon
         # straight corridor ahead of the actual pose (the car lags the plan)
         self.declare_parameter("heading_check_m",        4.5)
@@ -276,9 +279,12 @@ class PurePursuitController(Node):
         target_speed = self._p("target_speed")
         decel = self._p("comfort_decel")
         hit = None
+        perception_ok = True
         if self._p("use_obstacles"):
+            obstacles = self._current_obstacles(now)
+            perception_ok = obstacles is not None or not self._p("require_perception")
             hit = obstacle_along_path(
-                px, py, yaw, self._waypoints, self._current_obstacles(now),
+                px, py, yaw, self._waypoints, obstacles or [],
                 corridor_half_width=self._p("corridor_half_width_m"),
                 ego_half_length=self._p("ego_half_length"),
                 ego_speed=speed,
@@ -292,6 +298,12 @@ class PurePursuitController(Node):
             self._p("end_stop_margin_m"), decel,
         )
         speed_limit = min(obstacle_limit, end_limit)
+        if not perception_ok:
+            # Found by the randomized sweep: perception came up 8 s late, the
+            # empty obstacle list read as "clear" and the car hit the lead.
+            speed_limit = 0.0
+            self.get_logger().warn(
+                "No fresh /perception/objects — holding.", throttle_duration_sec=2.0)
         throttle, brake = speed_command(
             speed, speed_limit, self._p("kp_speed"), self._p("kp_brake"),
         )
@@ -315,13 +327,14 @@ class PurePursuitController(Node):
 
     # ── Helpers ───────────────────────────────────────────────────────────
 
-    def _current_obstacles(self, now: float) -> list[tuple]:
+    def _current_obstacles(self, now: float) -> Optional[list[tuple]]:
+        """Return the latest obstacle list, or None if perception is absent or stale."""
         timeout = self._p("obstacle_timeout")
         if self._objects_stamp is not None and now - self._objects_stamp <= timeout:
             return self._objects
         if self._points_stamp is not None and now - self._points_stamp <= timeout:
             return self._points
-        return []
+        return None
 
     def _check_stuck(self, throttle: float, speed: float, now: float) -> bool:
         """Return True (and start a recovery phase) if pushing without moving."""

@@ -211,3 +211,76 @@ def test_heading_corridor_catches_lead_the_plan_has_already_left():
     assert gap == pytest.approx(6.5 - 2.2 - 2.4)
     # once the car is in the target lane the lead no longer blocks
     assert obstacle_along_path(0, 3.3, 0, plan, [lead], heading_check_m=4.5, **kw) is None
+
+
+def _arc(radius, n=40, step=1.0, y0=0.0):
+    """Left arc from (0, y0) heading +x."""
+    out = []
+    for i in range(1, n):
+        a = i * step / radius
+        out.append((radius * math.sin(a), y0 + radius * (1 - math.cos(a))))
+    return out
+
+
+def test_sustained_curvature_curve_vs_lane_change():
+    from av_control.pure_pursuit import sustained_curvature
+    assert sustained_curvature([(0.0, 0.0)] + _arc(26.5)) == pytest.approx(1 / 26.5, rel=0.1)
+    # lane change S on a straight: turns left then right
+    s_curve = [(float(x), 3.5 * (3 * (x / 20) ** 2 - 2 * (x / 20) ** 3)) for x in range(1, 21)]
+    s_curve += [(float(x), 3.5) for x in range(21, 40)]
+    assert sustained_curvature([(0.0, 0.0)] + s_curve) == 0.0
+
+
+def test_heading_corridor_follows_the_curve():
+    # ego in the inner lane of a left curve; a car level-ish in the outer lane
+    # (3.5 m to the right along the curve), ~9 m ahead: not in our way
+    R = 26.5
+    plan = _arc(R)
+    a = 9.0 / R
+    rx, ry = (R + 3.5) * math.sin(a), R - (R + 3.5) * math.cos(a)
+    other = (rx, ry, a, 2.2, 0.9, 1.0 * math.cos(a), 1.0 * math.sin(a))
+    kw = dict(corridor_half_width=1.35, ego_half_length=2.4, heading_check_m=4.5)
+    assert obstacle_along_path(0, 0, 0, plan, [other], **kw) is None
+
+
+def test_governor_keeps_following_a_slow_noisy_lead():
+    # 0.6 m/s lead, perception noise 0.2 m/s / 0.4 m: without hysteresis the
+    # median speed dips under 0.5 m/s, stop-and-hold latches, the car stop-starts
+    import random
+    from av_control.pure_pursuit import ObstacleSpeedGovernor
+    for seed in range(10):
+        rng = random.Random(seed)
+        g = ObstacleSpeedGovernor(stop_distance=3.5, comfort_decel=1.5)
+        gap, v_ego = 5.0, 0.6
+        for _ in range(600):          # 60 s at 10 Hz
+            v_cmd = g.update(gap + rng.gauss(0.0, 0.4), 3.0,
+                             lead_speed=0.6 + rng.gauss(0.0, 0.2))
+            v_ego += max(-0.15, min(0.15, v_cmd - v_ego))
+            gap += (0.6 - v_ego) * 0.1
+            assert v_ego > 0.05, f"stopped behind a moving lead (seed {seed})"
+
+
+def test_slow_lead_reports_its_raw_speed():
+    lead = car(10.0, 0.0, vx=0.4)       # below the 0.5 m/s "parked" threshold
+    gap, v_along = obstacle_along_path(0, 0, 0, [(float(x), 0.0) for x in range(1, 30)],
+                                       [lead], corridor_half_width=1.35, ego_half_length=2.4)
+    assert v_along == pytest.approx(0.4)
+
+
+def test_oncoming_car_on_a_curve_is_predicted_along_its_lane():
+    # ego in the outer lane of a left curve (R 30 m); an oncoming car in the
+    # inner lane (3.5 m left) ~25 m ahead: its tangent crosses our lane, its lane doesn't
+    R = 30.0
+    plan = _arc(R, n=60)
+    a = 25.0 / R
+    ox, oy = (R - 3.5) * math.sin(a), R - (R - 3.5) * math.cos(a)
+    yaw = a + math.pi
+    v = 4.0
+    oncoming = (ox, oy, yaw, 2.2, 0.9, v * math.cos(yaw), v * math.sin(yaw))
+    kw = dict(corridor_half_width=1.35, ego_half_length=2.4, ego_speed=2.0,
+              heading_check_m=4.5)
+    assert obstacle_along_path(0, 0, 0, plan, [oncoming], **kw) is None
+    # ...but a car cutting in across the path is still caught
+    cut_in = (10.0, 3.0, -0.5, 2.2, 0.9, 1.0, -1.0)
+    plan_straight = [(float(x), 0.0) for x in range(1, 40)]
+    assert obstacle_along_path(0, 0, 0, plan_straight, [cut_in], **kw) is not None

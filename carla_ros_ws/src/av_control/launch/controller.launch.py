@@ -31,6 +31,7 @@ def generate_launch_description():
                 # box edge (footprints touch below ~0.93 m; planners keep
                 # lattice 1.75 / mppi 1.95), stop distance bumper -> box.
                 'use_obstacles':          True,
+                'require_perception':     True,   # hold while perception is absent or stale
                 'corridor_half_width_m':  1.35,
                 'stop_distance_m':        3.5,
                 'comfort_decel':          2.0,

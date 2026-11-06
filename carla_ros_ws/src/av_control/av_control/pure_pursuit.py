@@ -68,9 +68,9 @@ def _as_obstacle(o) -> tuple:
 
 
 def _closest_on_path(path: Sequence[Point], ox: float, oy: float):
-    """(distance, arc length, unit direction) of the closest point on a polyline."""
+    """Return (distance, arc length, unit direction, lateral, + = left) of the closest point."""
     s_acc = 0.0
-    best = (float("inf"), 0.0, (1.0, 0.0))
+    best = (float("inf"), 0.0, (1.0, 0.0), 0.0)
     for (ax, ay), (bx, by) in zip(path[:-1], path[1:]):
         abx, aby = bx - ax, by - ay
         seg = math.hypot(abx, aby)
@@ -79,7 +79,8 @@ def _closest_on_path(path: Sequence[Point], ox: float, oy: float):
         t = max(0.0, min(1.0, ((ox - ax) * abx + (oy - ay) * aby) / (seg * seg)))
         d = math.hypot(ox - (ax + t * abx), oy - (ay + t * aby))
         if d < best[0]:
-            best = (d, s_acc + t * seg, (abx / seg, aby / seg))
+            ux, uy = abx / seg, aby / seg
+            best = (d, s_acc + t * seg, (ux, uy), -(ox - ax) * uy + (oy - ay) * ux)
         s_acc += seg
     return best
 
@@ -106,7 +107,10 @@ def obstacle_along_path(
     path anywhere along its predicted motion until the ego gets there
     (t = arc length / max(ego_speed, min_speed), capped at `max_predict_s`;
     the swept positions are sampled) — so a pedestrian walking into, or
-    across, the lane counts.
+    across, the lane counts.  Motion is predicted at constant velocity in
+    the path's frame (along-path and lateral speed kept): a car following
+    its lane round a curve stays in its lane.  A straight-line prediction
+    swept oncoming cars on a curve across the ego's lane, and the car braked.
 
     gap     : arc length from the ego along the path to the obstacle box,
               minus `ego_half_length` (≈ bumper-to-box distance)
@@ -118,7 +122,10 @@ def obstacle_along_path(
     its front bumper.  The path corridor follows the plan, but the car lags
     it — mid lane change the plan had already left the lead's lane, so the
     controller sped up while the car was still half behind the lead (1.3 m
-    bumper gaps offline).
+    bumper gaps offline).  It is bent by the path's *sustained* curvature
+    (sustained_curvature): a straight line on a R≈26 m curve drifts ~1.5 m
+    outward in 9 m and braked for cars in the outer lane or parked off the
+    road; the S of a lane change reverses sign, so it stays straight there.
 
     Obstacles slower than `moving_threshold` are treated as stationary (so
     velocity noise on parked cars doesn't sweep them into the corridor).
@@ -132,42 +139,80 @@ def obstacle_along_path(
         path.append((px + 50.0 * math.cos(yaw), py + 50.0 * math.sin(yaw)))
 
     hx, hy = math.cos(yaw), math.sin(yaw)
+    kappa = sustained_curvature(path) if heading_check_m > 0.0 else 0.0
     best: Optional[tuple[float, float]] = None
     for o in obstacles:
-        ox, oy, oyaw, hl, hw, vx, vy = _as_obstacle(o)
-        if math.hypot(vx, vy) < moving_threshold:
-            vx = vy = 0.0
-        d, s, (ux, uy) = _closest_on_path(path, ox, oy)
-        t = min(max_predict_s, s / max(ego_speed, min_speed))
+        ox, oy, oyaw, hl, hw, rvx, rvy = _as_obstacle(o)
+        # Slow = parked for the swept prediction, but report the raw speed
+        # (zeroing it made a 0.6 m/s lead read 0 in a third of the frames,
+        # so the governor flickered between following and stop-and-hold).
+        vx, vy = (0.0, 0.0) if math.hypot(rvx, rvy) < moving_threshold else (rvx, rvy)
+        _, s0, (ux, uy), lat0 = _closest_on_path(path, ox, oy)
+        if s0 <= 0.0:                     # beside/behind the ego: along its heading
+            s0 = (ox - px) * hx + (oy - py) * hy
+        v_al, v_lat = vx * ux + vy * uy, -vx * uy + vy * ux     # path frame
+        rel = oyaw - math.atan2(uy, ux)
+        ext_along = hl * abs(math.cos(rel)) + hw * abs(math.sin(rel))
+        ext_lat = hl * abs(math.sin(rel)) + hw * abs(math.cos(rel))
+        t = min(max_predict_s, max(s0, 0.0) / max(ego_speed, min_speed))
         steps = predict_samples if (vx or vy) else 0
         for k in range(steps + 1):
-            cx = ox + vx * t * k / max(steps, 1)
-            cy = oy + vy * t * k / max(steps, 1)
-            if (cx - px) * hx + (cy - py) * hy <= 0.0:
+            tk = t * k / max(steps, 1)
+            s_k, lat_k = s0 + v_al * tk, lat0 + v_lat * tk
+            if s_k <= 0.0:
                 continue  # behind ego
-            d, s, (ux, uy) = _closest_on_path(path, cx, cy)
-            rel = oyaw - math.atan2(uy, ux)
-            ext_along = hl * abs(math.cos(rel)) + hw * abs(math.sin(rel))
-            ext_lat = hl * abs(math.sin(rel)) + hw * abs(math.cos(rel))
-            if d - ext_lat > corridor_half_width:
+            if abs(lat_k) - ext_lat > corridor_half_width:
                 continue
-            gap = max(0.0, s - ext_along - ego_half_length)
-            v_along = vx * ux + vy * uy
+            gap = max(0.0, s_k - ext_along - ego_half_length)
+            v_along = rvx * ux + rvy * uy
             if best is None or gap < best[0]:
                 best = (gap, v_along)
         if heading_check_m > 0.0:
-            # corridor along the ego's own heading (current position only)
+            # corridor along the ego's own heading, bent by the road's
+            # curvature (current position only)
             a = (ox - px) * hx + (oy - py) * hy
-            lat = -(ox - px) * hy + (oy - py) * hx
-            rel = oyaw - yaw
+            lat = -(ox - px) * hy + (oy - py) * hx - 0.5 * kappa * a * a
+            rel = oyaw - (yaw + kappa * a)
             ea = hl * abs(math.cos(rel)) + hw * abs(math.sin(rel))
             el = hl * abs(math.sin(rel)) + hw * abs(math.cos(rel))
             if (a > 0.0 and a - ea <= ego_half_length + heading_check_m
                     and abs(lat) - el <= corridor_half_width):
                 gap = max(0.0, a - ea - ego_half_length)
                 if best is None or gap < best[0]:
-                    best = (gap, vx * hx + vy * hy)
+                    best = (gap, rvx * hx + rvy * hy)
     return best
+
+
+def sustained_curvature(path: Sequence[Point], length: float = 15.0,
+                        step: float = 2.5) -> float:
+    """
+    Return the curvature common to the path's first `length` m (+ = left).
+
+    The path is resampled every `step` m; if every chord turns the same way
+    the result is the net heading change over the stretch divided by its
+    length, else 0 (a lane change's S, or a straight).
+    """
+    s_acc = [0.0]
+    for (x0, y0), (x1, y1) in zip(path, path[1:]):
+        s_acc.append(s_acc[-1] + math.hypot(x1 - x0, y1 - y0))
+    total = min(length, s_acc[-1])
+    n = int(total // step)
+    if n < 3:
+        return 0.0
+    pts, k = [], 0
+    for i in range(n + 1):
+        target = i * step
+        while k < len(path) - 2 and s_acc[k + 1] < target:
+            k += 1
+        seg = max(s_acc[k + 1] - s_acc[k], 1e-9)
+        f = min(1.0, max(0.0, (target - s_acc[k]) / seg))
+        pts.append((path[k][0] + f * (path[k + 1][0] - path[k][0]),
+                    path[k][1] + f * (path[k + 1][1] - path[k][1])))
+    head = [math.atan2(y1 - y0, x1 - x0) for (x0, y0), (x1, y1) in zip(pts, pts[1:])]
+    turns = [(h1 - h0 + math.pi) % (2 * math.pi) - math.pi for h0, h1 in zip(head, head[1:])]
+    if all(t > 0 for t in turns) or all(t < 0 for t in turns):
+        return sum(turns) / (step * len(turns))
+    return 0.0
 
 
 def effective_gap(gap: Optional[float], v_along: float, comfort_decel: float) -> Optional[float]:
@@ -313,6 +358,7 @@ class ObstacleSpeedGovernor:
         self._hist: list[float] = []
         self._speed_hist: list[float] = []
         self.holding = False
+        self.following = False   # hysteresis: stays a lead down to half the threshold
 
     def update(self, obstacle_dist: Optional[float], target_speed: float,
                lead_speed: float = 0.0) -> float:
@@ -330,7 +376,9 @@ class ObstacleSpeedGovernor:
         dist = None if math.isinf(filtered) else filtered
         v_lead = sorted(self._speed_hist)[len(self._speed_hist) // 2]
 
-        if dist is not None and v_lead >= self.moving_threshold:
+        lead_threshold = self.moving_threshold * (0.5 if self.following else 1.0)
+        self.following = dist is not None and v_lead >= lead_threshold
+        if self.following:
             self.holding = False
             d_des = self.stop_distance + self.follow_time_gap * v_lead
             v_follow = v_lead + self.follow_gain * (dist - d_des)
