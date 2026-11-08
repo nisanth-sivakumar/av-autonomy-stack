@@ -213,7 +213,9 @@ def main():
     if ego is not None:
         ref_loc, ref_yaw, ref_name = ego.get_location(), ego.get_transform().rotation.yaw, "live ego"
     else:
-        (ref_loc, ref_yaw), ref_name = ego_spawn_location(), "ego spawn point (config/objects.json)"
+        (ref_loc, ref_yaw), ref_name = ego_spawn_location(), (
+            "ego spawn point ($EGO_SPAWN)" if os.environ.get("EGO_SPAWN")
+            else "ego spawn point (config/objects.json)")
     print(f"Placing relative to the {ref_name}.")
 
     placements = list(SCENARIOS.get(args.scenario, [(30.0, 0.0)]))
@@ -235,6 +237,7 @@ def main():
         if wp is None:
             print(f"  road ends after {travelled:.0f} m — cannot place a car at {dist:.0f} m")
             continue
+        road_wp = wp                       # the reference lane, for the road hint
         if args.lane:
             nb = wp.get_left_lane() if args.lane == "left" else wp.get_right_lane()
             if nb is None or nb.lane_type != carla.LaneType.Driving:
@@ -255,7 +258,7 @@ def main():
         spawned.append(actor)
         # ROS frame for comparison with /perception/obstacles: y negated
         print(f"  {args.blueprint} at {dist:.0f} m ahead, {lat:+.1f} m left of centre "
-              f"(road {curvature_hint(ego_wp, wp)}{', JUNCTION on the way' if junction else ''})\n"
+              f"(road {curvature_hint(ego_wp, road_wp)}{', JUNCTION on the way' if junction else ''})\n"
               f"    ROS map frame: x={loc.x:.1f} y={-loc.y:.1f}   lane width {wp.lane_width:.1f} m")
 
     if not spawned:

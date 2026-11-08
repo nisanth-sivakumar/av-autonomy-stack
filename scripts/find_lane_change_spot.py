@@ -11,6 +11,9 @@ spawn_scenario.py:
     python3 scripts/find_lane_change_spot.py              # CARLA must be running
     EGO_SPAWN="x,y,z,0,0,yaw" ./scripts/reset_run.sh lattice
 
+With --oncoming it finds the opposite: straights whose left neighbour is an
+ONCOMING driving lane (runbook Step 5d: the car must never change into it).
+
 Read-only: it spawns nothing.
 """
 
@@ -20,12 +23,17 @@ import math
 import carla
 
 
+ONCOMING = False   # set by --oncoming
+
+
 def same_left(wp):
-    """The left neighbour if it is a driving lane in the same direction."""
+    """The left neighbour if it is a driving lane in the wanted direction
+    (same direction, or oncoming with --oncoming)."""
     nb = wp.get_left_lane()
     if nb is None or nb.lane_type != carla.LaneType.Driving:
         return None
-    return nb if (nb.lane_id > 0) == (wp.lane_id > 0) else None
+    same = (nb.lane_id > 0) == (wp.lane_id > 0)
+    return nb if same != ONCOMING else None
 
 
 def stretch(wp, length, step=2.0):
@@ -52,12 +60,17 @@ def main():
                     help="metres of straight two-lane road needed ahead of the spawn")
     ap.add_argument("--max-turn", type=float, default=8.0, help="max heading change, degrees")
     ap.add_argument("-n", type=int, default=5, help="candidates to print")
+    ap.add_argument("--oncoming", action="store_true",
+                    help="find straights whose left lane is ONCOMING instead (Step 5d)")
     args = ap.parse_args()
+    global ONCOMING
+    ONCOMING = args.oncoming
 
     client = carla.Client(args.host, args.port)
     client.set_timeout(20.0)
     cmap = client.get_world().get_map()
-    print(f"Map {cmap.name}: scanning for {args.length:.0f} m two-lane same-direction straights…")
+    kind = "oncoming-left" if ONCOMING else "two-lane same-direction"
+    print(f"Map {cmap.name}: scanning for {args.length:.0f} m {kind} straights…")
 
     found, seen = [], set()
     for wp in cmap.generate_waypoints(5.0):
