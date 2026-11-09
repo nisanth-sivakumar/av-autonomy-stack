@@ -54,6 +54,7 @@ Coordinate conventions
 """
 
 import math
+import time
 from typing import Optional
 
 import rclpy
@@ -69,6 +70,7 @@ from nav_msgs.msg import Odometry, Path
 from geometry_msgs.msg import PoseArray
 from carla_msgs.msg import CarlaEgoVehicleControl
 from derived_object_msgs.msg import ObjectArray
+from std_msgs.msg import Float32
 
 from av_control.pure_pursuit import (
     quaternion_to_yaw,
@@ -176,6 +178,9 @@ class PurePursuitController(Node):
         self._cmd_pub = self.create_publisher(
             CarlaEgoVehicleControl, "/carla/ego_vehicle/vehicle_control_cmd", 10,
         )
+        # per-tick compute time (wall clock: a CPU cost, not node timing),
+        # for comparison with av_control_cpp's MPC solve time
+        self._time_pub = self.create_publisher(Float32, "/control/compute_time_ms", 10)
         self.create_subscription(Odometry, "/carla/ego_vehicle/odometry", self._odom_cb, odom_qos)
         self.create_subscription(Path, "/planning/trajectory", self._trajectory_cb, latched_qos)
         self.create_subscription(ObjectArray, "/perception/objects", self._objects_cb, 10)
@@ -253,6 +258,7 @@ class PurePursuitController(Node):
             )
 
         # ── Lateral: Pure Pursuit with adaptive lookahead ─────────────────
+        t_compute = time.perf_counter()
         prune_passed(self._waypoints, px, py, yaw)
         lookahead = adaptive_lookahead(
             speed, px, py, self._waypoints,
@@ -274,6 +280,7 @@ class PurePursuitController(Node):
             gain=self._p("steering_gain"),
             max_steer=self._p("max_steer"),
         )
+        self._time_pub.publish(Float32(data=(time.perf_counter() - t_compute) * 1e3))
 
         # ── Longitudinal ──────────────────────────────────────────────────
         target_speed = self._p("target_speed")
