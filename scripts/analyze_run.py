@@ -57,6 +57,7 @@ TRAJ_TOPIC = "/planning/trajectory"
 OBST_TOPIC = "/perception/obstacles"
 LANE_OFF_TOPIC = "/perception/lane_offset"
 BEHAVIOR_TOPIC = "/planning/behavior"
+COMPUTE_TOPIC = "/control/compute_time_ms"
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +171,7 @@ def make_typestore():
 def read_bag(bag_path: Path) -> dict:
     typestore = make_typestore()
     data = {k: [] for k in ("odom", "control", "speed", "traj", "obst", "lane",
-                            "collision", "lane_inv", "behavior")}
+                            "collision", "lane_inv", "behavior", "compute")}
     print(f"Reading bag: {bag_path}")
 
     with Reader(bag_path) as reader:
@@ -183,7 +184,8 @@ def read_bag(bag_path: Path) -> dict:
             t = timestamp * 1e-9
             topic = conn.topic
             if topic not in (ODOM_TOPIC, CONTROL_TOPIC, SPEED_TOPIC, TRAJ_TOPIC, OBST_TOPIC,
-                             LANE_OFF_TOPIC, COLLISION_TOPIC, LANE_INV_TOPIC, BEHAVIOR_TOPIC):
+                             LANE_OFF_TOPIC, COLLISION_TOPIC, LANE_INV_TOPIC, BEHAVIOR_TOPIC,
+                             COMPUTE_TOPIC):
                 continue
             try:
                 msg = typestore.deserialize_cdr(raw, conn.msgtype)
@@ -218,9 +220,11 @@ def read_bag(bag_path: Path) -> dict:
                 data["lane_inv"].append(t)
             elif topic == BEHAVIOR_TOPIC:
                 data["behavior"].append((t, msg.data.split()[0].split("=", 1)[-1]))
+            elif topic == COMPUTE_TOPIC:
+                data["compute"].append(msg.data)
 
     for k in ("odom", "control", "speed", "traj", "obst", "lane", "collision", "lane_inv",
-              "behavior"):
+              "behavior", "compute"):
         print(f"  {k:<10}: {len(data[k])} msgs")
     return data
 
@@ -305,6 +309,18 @@ def analyze(bag_path: Path, output_dir: Path, show: bool):
     abs_cte = np.abs(odom["cte"].dropna())
     lane = merged["lane_offset"].dropna()
 
+    # bag stamps are wall time; CARLA runs faster than real time in sync mode
+    wall = float(odom["t"].iloc[-1] - odom["t"].iloc[0])
+    sim = float(odom["t_sim"].iloc[-1] - odom["t_sim"].iloc[0])
+    sim_per_wall = sim / wall if wall > 0 and sim > 0 else 1.0
+    moving = odom[odom["speed"] > 0.5]
+    jerk = None
+    if len(moving) > 3:
+        ts = moving["t_sim"].to_numpy()
+        acc = np.gradient(moving["speed"].to_numpy(), ts)
+        jerk = float(np.sqrt(np.mean(np.gradient(acc, ts) ** 2)))
+    comp = np.asarray(data["compute"], float)
+
     def fmt(v, spec=".3f", unit=""):
         return "n/a" if v is None or (isinstance(v, float) and math.isnan(v)) else f"{v:{spec}}{unit}"
 
@@ -318,7 +334,13 @@ def analyze(bag_path: Path, output_dir: Path, show: bool):
         "Max speed (m/s)":               fmt(float(odom["speed"].max()), ".2f"),
         "Mean |CTE| vs plan (m)":        fmt(float(abs_cte.mean()) if len(abs_cte) else None),
         "Max |CTE| vs plan (m)":         fmt(float(abs_cte.max()) if len(abs_cte) else None),
-        "Steering rate RMS (1/s)":       fmt(compute_jerk(ctl["steer"].values, ctl["t"].values), ".4f"),
+        # steer command units (normalized by 70 deg) per simulated second
+        "Steering rate RMS (1/s, sim)":  fmt(compute_jerk(ctl["steer"].values, ctl["t"].values)
+                                             / sim_per_wall, ".4f"),
+        "Longitudinal jerk RMS (m/s3)":  fmt(jerk, ".2f"),
+        "Controller compute p50/p99 (ms)": (f"{np.percentile(comp, 50):.3f} / "
+                                            f"{np.percentile(comp, 99):.3f}" if len(comp) else
+                                            "n/a (no /control/compute_time_ms)"),
         "Braking time (%)":              fmt(float((ctl["brake"] > 0.1).mean() * 100) if len(ctl) else None, ".1f"),
         "Collisions (events)":           str(count_events(data["collision"])),
         "Lane invasions (events)":       str(count_events(data["lane_inv"])),

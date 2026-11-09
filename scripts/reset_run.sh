@@ -11,6 +11,8 @@
 #                                           # frame (A* route, stops there)
 #   EGO_SPAWN="x,y,z,roll,pitch,yaw" ./scripts/reset_run.sh lattice
 #                                           # spawn elsewhere (ROS frame, as in objects.json)
+#   CONTROLLER=mpc ./scripts/reset_run.sh mppi
+#                                           # LTV MPC (av_control_cpp) instead of Pure Pursuit
 #
 # Prerequisites: CARLA server running (Windows) and carla_ros_bridge running
 # in another terminal. Can be run from any directory.
@@ -30,6 +32,11 @@ PLANNER_TYPE="${1:-road_graph}"
 case "$PLANNER_TYPE" in
     road_graph|lattice|mppi) ;;
     *) echo "Unknown planner '$PLANNER_TYPE' (expected road_graph | lattice | mppi)"; exit 1 ;;
+esac
+CONTROLLER="${CONTROLLER:-pure_pursuit}"
+case "$CONTROLLER" in
+    pure_pursuit|mpc) ;;
+    *) echo "CONTROLLER must be pure_pursuit or mpc (got '$CONTROLLER')"; exit 1 ;;
 esac
 GOAL_ARGS=()
 if [ $# -ge 3 ]; then
@@ -125,6 +132,7 @@ abort() {
 
 NODE_PATTERNS=(
     "lib/av_control/controller_node"
+    "lib/av_control_cpp/mpc_controller_node"
     "lib/av_planning/planner_node"
     "lib/av_perception/perception_node"
     "carla_spawn_objects"
@@ -162,7 +170,8 @@ fi
 # ---- Start bag recording -------------------------------------------------
 
 mkdir -p bags
-RUN_ID="run_${PLANNER_TYPE}_$(date +%Y%m%d_%H%M%S)"
+CTRL_TAG=""; [ "$CONTROLLER" = mpc ] && CTRL_TAG="_mpc"
+RUN_ID="run_${PLANNER_TYPE}${CTRL_TAG}_$(date +%Y%m%d_%H%M%S)"
 BAG_PATH="bags/$RUN_ID"
 
 echo "==> Starting bag recording → $BAG_PATH"
@@ -177,6 +186,7 @@ ros2 bag record \
     /perception/obstacles \
     /perception/objects \
     /planning/behavior \
+    /control/compute_time_ms \
     /perception/lane_offset &
 BAG_PID=$!
 
@@ -222,8 +232,8 @@ echo "    /planning/trajectory OK"
 
 # ---- Controller ----------------------------------------------------------
 
-echo "==> Launching controller..."
-ros2 launch av_control controller.launch.py &
+echo "==> Launching controller ($CONTROLLER)..."
+ros2 launch av_control controller.launch.py controller:="$CONTROLLER" &
 CTRL_PID=$!
 
 # ---- Summary -------------------------------------------------------------
