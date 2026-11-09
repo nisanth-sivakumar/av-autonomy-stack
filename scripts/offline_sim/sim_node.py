@@ -48,6 +48,7 @@ from derived_object_msgs.msg import ObjectArray
 import offline_road as road
 
 DT = 0.05
+HOLD_CAP_S = 20.0        # s of /clock the car is held at most waiting for the stack
 # Vehicle geometry ($OFFLINE_SIM_VEHICLE):
 #   legacy (default): kinematic bicycle about the reported point, wheelbase
 #                     2.875 m: exactly Pure Pursuit's own model.
@@ -132,6 +133,7 @@ class SimNode(Node):
         # like reset_run.sh: release the car only once perception is up too
         # (the controller holds without it, which counted as "stopped")
         self.perception_up = False
+        self.controller_driving = False
         self.create_subscription(ObjectArray, "/perception/objects",
                                  lambda m: setattr(self, "perception_up", True), 10)
         self.create_subscription(Float32, "/control/compute_time_ms",
@@ -144,6 +146,8 @@ class SimNode(Node):
     # ── inputs ──────────────────────────────────────────────────────────
     def _cmd_cb(self, msg):
         self.cmd = (msg.throttle, msg.steer, msg.brake)
+        if msg.throttle > 0.0:
+            self.controller_driving = True
 
     def _lane_cb(self, msg):
         self.lane_offset_msgs += 1
@@ -194,8 +198,15 @@ class SimNode(Node):
         self.steps += 1
         if self.steps % 2 == 0:
             self._publish_camera()               # 10 Hz of simulated time
-        if self.traj_msgs == 0 or not self.perception_up:
-            # Hold the vehicle until the stack is up (trajectory and perception)
+        if (self.traj_msgs == 0 or not self.perception_up or not self.controller_driving) \
+                and self.clock_t < HOLD_CAP_S:
+            # Hold the vehicle (and the scenario's clock) until the stack is up:
+            # trajectory, perception, and a controller that has asked for throttle,
+            # as reset_run.sh starts the controller only once the rest publishes.
+            # Under parallel load a controller can take seconds to discover
+            # /perception/objects (its perception gate brakes meanwhile); a lattice
+            # plan drifted 1.8 m sideways beside the waiting car.  Capped, so a
+            # controller that never drives still fails the run.
             self._publish_odom()
             return
 
