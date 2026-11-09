@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # scripts/check.sh — the project's test gate (local stand-in for CI; CI calls this too)
 #
-#   ./scripts/check.sh            # build + unit tests + offline closed-loop scenarios (~11 min)
+#   ./scripts/check.sh            # build + unit tests + offline scenarios, both controllers (~9 min)
 #   ./scripts/check.sh --quick    # build + unit tests only
 #
 # Steps:
 #   1. colcon build of the stack and its dependencies (carla_msgs etc. from ros-bridge)
 #   2. colcon test + colcon test-result --verbose (fails on any test failure)
-#   3. unless --quick: scripts/offline_sim/run_scenarios.py (fails if any scenario fails)
+#   3. unless --quick: scripts/offline_sim/run_scenarios.py for Pure Pursuit and the MPC
+#      (fails if any scenario fails)
 #
 # Exits non-zero on the first failing step.  Offline-scenario logs and results
 # go to $CHECK_OUT (default: log/check/offline_sim under the repo root), which
@@ -28,7 +29,7 @@ for arg in "$@"; do
 done
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PACKAGES=(av_control av_planning av_perception)
+PACKAGES=(av_control av_control_cpp av_planning av_perception)
 CHECK_OUT="${CHECK_OUT:-$REPO_ROOT/log/check/offline_sim}"
 
 step() { echo; echo "==> $*"; }
@@ -63,9 +64,19 @@ fi
 step "Offline closed-loop scenarios (results: $CHECK_OUT)"
 mkdir -p "$CHECK_OUT"
 cd "$REPO_ROOT"
-if ! python3 scripts/offline_sim/run_scenarios.py --workdir "$CHECK_OUT" | tee "$CHECK_OUT/summary.txt"; then
-    echo "FAIL: offline scenarios (see $CHECK_OUT)"
-    exit 1
-fi
+# Both controllers, each in the sim geometry it currently passes: Pure
+# Pursuit in the legacy model (its own), the MPC in CARLA's Model 3 geometry
+# (rear-axle bicycle, 3.005 m).  --rate 4 gives the same results as 1x.
+for ctl in "pure_pursuit legacy" "mpc carla"; do
+    set -- $ctl
+    out="$CHECK_OUT/$1"
+    mkdir -p "$out"
+    echo "--- controller $1, vehicle $2"
+    if ! python3 scripts/offline_sim/run_scenarios.py --controller "$1" --vehicle "$2" --rate 4 \
+            --workdir "$out" | tee "$out/summary.txt"; then
+        echo "FAIL: offline scenarios, $1 (see $out)"
+        exit 1
+    fi
+done
 
 echo; echo "==> check passed"

@@ -43,11 +43,20 @@ from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import Float32, String
 from rosgraph_msgs.msg import Clock
 from carla_msgs.msg import CarlaEgoVehicleControl
+from derived_object_msgs.msg import ObjectArray
 
 import offline_road as road
 
 DT = 0.05
-WHEELBASE = 2.875
+# Vehicle geometry ($OFFLINE_SIM_VEHICLE):
+#   legacy (default): kinematic bicycle about the reported point, wheelbase
+#                     2.875 m: exactly Pure Pursuit's own model.
+#   carla           : CARLA's Model 3: wheelbase 3.005 m, integrated at the
+#                     rear axle, odometry at the vehicle centre 1.5 m ahead
+#                     (as CARLA reports it).  Neither controller's own model,
+#                     so the fair basis for comparing them.
+VEHICLE = os.environ.get("OFFLINE_SIM_VEHICLE", "legacy")
+WHEELBASE, REAR_TO_CENTRE = {"legacy": (2.875, 0.0), "carla": (3.005, 1.5)}[VEHICLE]
 MAX_WHEEL_ANGLE = math.radians(70.0)
 CAM_W, CAM_H, CAM_FOV = 400, 200, 90.0
 CAM_X, CAM_Z = 2.0, 2.0
@@ -66,8 +75,16 @@ class SimNode(Node):
         self.duration = duration
         x, y = road.point_at(start_s, start_lateral)
         yaw = road.pose_at(start_s)[2] + math.radians(start_yaw_deg)
-        self.x, self.y, self.yaw, self.v = x, y, yaw, 0.0
+        self.x, self.y, self.yaw, self.v = x, y, yaw, 0.0       # vehicle centre
         self.cmd = (0.0, 0.0, 0.0)
+        # controller comparison metrics
+        self.steer_rates = []        # wheel angle rate, rad/s, while driving
+        self.jerks = []              # m/s^3, while driving
+        self.prev_steer = None
+        self.prev_acc = None
+        self.compute_ms = []
+        self.plan = None             # latest trajectory, (N, 2)
+        self.plan_cte = []           # distance from the centre to the plan
         self.t = 0.0
         self.obstacle_specs = road.obstacle_specs()
         self.goal_s = goal_s
@@ -98,7 +115,8 @@ class SimNode(Node):
         self.traj_msgs = 0
         self.last_lateral = 0.0
         self.final_s = start_s
-        self.stopped_time = 0.0
+        self.stopped_time = 0.0      # standstill after the car first moved
+        self.start_delay = None      # s from release to first motion (controller start-up)
 
         self.odom_pub = self.create_publisher(Odometry, "/carla/ego_vehicle/odometry", 10)
         self.clock_pub = self.create_publisher(Clock, "/clock", 10)
@@ -111,6 +129,13 @@ class SimNode(Node):
         self.create_subscription(Float32, "/perception/lane_offset", self._lane_cb, 10)
         self.create_subscription(Path, "/planning/trajectory", self._traj_cb, 1)
         self.create_subscription(String, "/planning/behavior", self._behavior_cb, 10)
+        # like reset_run.sh: release the car only once perception is up too
+        # (the controller holds without it, which counted as "stopped")
+        self.perception_up = False
+        self.create_subscription(ObjectArray, "/perception/objects",
+                                 lambda m: setattr(self, "perception_up", True), 10)
+        self.create_subscription(Float32, "/control/compute_time_ms",
+                                 lambda m: self.compute_ms.append(m.data), 10)
 
         # wall period DT / rate: the stack follows /clock, so it speeds up too
         self.create_timer(DT / max(rate, 1e-3), self._step)
@@ -134,7 +159,24 @@ class SimNode(Node):
                 self.aborts += 1
             self.behavior_states.append(state)
 
+    def _plan_distance(self):
+        """Distance from the vehicle centre to the latest plan, or None if the
+        car is not alongside it (plans start up to a waypoint ahead)."""
+        if self.plan is None or len(self.plan) < 2:
+            return None
+        a, b = self.plan[:-1], self.plan[1:]
+        ab = b - a
+        L2 = np.maximum((ab ** 2).sum(axis=1), 1e-9)
+        p = np.array([self.x, self.y])
+        t = ((p - a) * ab).sum(axis=1) / L2
+        inside = (t >= 0.0) & (t <= 1.0)
+        if not inside.any():
+            return None
+        d = np.hypot(*(a + np.clip(t, 0, 1)[:, None] * ab - p).T)
+        return float(d[inside].min())
+
     def _traj_cb(self, msg):
+        self.plan = np.array([(ps.pose.position.x, ps.pose.position.y) for ps in msg.poses])
         self.traj_msgs += 1
 
     # ── dynamics + metrics ───────────────────────────────────────────────
@@ -152,18 +194,31 @@ class SimNode(Node):
         self.steps += 1
         if self.steps % 2 == 0:
             self._publish_camera()               # 10 Hz of simulated time
-        if self.traj_msgs == 0:
-            # Hold the vehicle until the stack is up (first trajectory received)
+        if self.traj_msgs == 0 or not self.perception_up:
+            # Hold the vehicle until the stack is up (trajectory and perception)
             self._publish_odom()
             return
 
         throttle, steer, brake = self.cmd
         acc = 3.0 * throttle - 7.0 * brake - 0.05 * self.v
+        v_prev = self.v
         self.v = max(0.0, self.v + acc * DT)
+        acc = (self.v - v_prev) / DT              # actual (clipped at standstill)
         delta = -steer * MAX_WHEEL_ANGLE          # CARLA +steer = right turn
+        if self.v > 0.5:
+            if self.prev_steer is not None:
+                self.steer_rates.append((delta - self.prev_steer) / DT)
+            if self.prev_acc is not None:
+                self.jerks.append((acc - self.prev_acc) / DT)
+        self.prev_steer, self.prev_acc = delta, acc
+        # rear-axle kinematic bicycle; the state is kept at the centre
+        rx = self.x - REAR_TO_CENTRE * math.cos(self.yaw)
+        ry = self.y - REAR_TO_CENTRE * math.sin(self.yaw)
         self.yaw += self.v / WHEELBASE * math.tan(delta) * DT
-        self.x += self.v * math.cos(self.yaw) * DT
-        self.y += self.v * math.sin(self.yaw) * DT
+        rx += self.v * math.cos(self.yaw) * DT
+        ry += self.v * math.sin(self.yaw) * DT
+        self.x = rx + REAR_TO_CENTRE * math.cos(self.yaw)
+        self.y = ry + REAR_TO_CENTRE * math.sin(self.yaw)
         self.t += DT
         if self.clock_path:                      # shared time base for moving obstacles
             tmp = self.clock_path + ".tmp"
@@ -186,8 +241,15 @@ class SimNode(Node):
                                round(self.v, 2)])
         if self.t > 3.0:
             self.cte.append(lateral)
+            pd = self._plan_distance()
+            if pd is not None:
+                self.plan_cte.append(pd)
         self.max_speed = max(self.max_speed, self.v)
-        if self.v < 0.05:
+        if self.start_delay is None and self.v > 0.5:
+            self.start_delay = self.t
+        # Start-up waits (e.g. a controller still discovering /perception/objects
+        # under load) are not stops: count standstill only once the car has moved.
+        if self.v < 0.05 and self.start_delay is not None:
             self.stopped_time += DT
         if self.obstacle_specs:
             hit = False
@@ -273,7 +335,16 @@ class SimNode(Node):
     def report(self):
         cte = np.abs(np.asarray(self.cte)) if self.cte else np.zeros(1)
         lane = np.abs(np.asarray(self.lane_err)) if self.lane_err else None
+        rms = (lambda a: round(float(np.sqrt(np.mean(np.square(a)))), 4) if len(a) else None)
+        pct = (lambda a, q: round(float(np.percentile(a, q)), 3) if len(a) else None)
         return {
+            "vehicle_model": VEHICLE,
+            "max_plan_cte_m": round(max(self.plan_cte), 3) if self.plan_cte else None,
+            "mean_plan_cte_m": round(float(np.mean(self.plan_cte)), 4) if self.plan_cte else None,
+            "steer_rate_rms_radps": rms(self.steer_rates),
+            "jerk_rms_mps3": rms(self.jerks),
+            "compute_ms_p50": pct(self.compute_ms, 50),
+            "compute_ms_p99": pct(self.compute_ms, 99),
             "sim_time_s": round(self.t, 2),
             "final_s_m": round(self.final_s, 2),
             "max_speed_mps": round(self.max_speed, 2),
@@ -287,6 +358,7 @@ class SimNode(Node):
             "goal_error_m": None if self.goal_s is None else round(self.final_s - self.goal_s, 2),
             "collisions": self.collisions,
             "stopped_time_s": round(self.stopped_time, 2),
+            "start_delay_s": None if self.start_delay is None else round(self.start_delay, 2),
             "trajectory_msgs": self.traj_msgs,
             "lane_offset_msgs": self.lane_offset_msgs,
             "final_lateral_m": round(road.project(self.x, self.y)[1], 2),

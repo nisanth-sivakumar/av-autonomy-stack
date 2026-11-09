@@ -101,7 +101,7 @@ SCENARIOS = {
             ("collisions", r["collisions"] == 0),
         ] + ([
             ("no lane change", r["lane_changes"] == 0 and r["max_lateral_m"] < 1.0),
-            ("kept following", r["final_speed_mps"] > 0.5),
+            ("kept following (stopped < 2 s)", r["stopped_time_s"] < 2.0),
         ] if p == "road_graph" else [
             ("changed lane", r["lane_changes"] >= 1),
             ("bumper gap to the lead ≥ 2 m", (r["min_lead_gap_m"] or 99) >= 2.0),
@@ -119,7 +119,7 @@ SCENARIOS = {
         check=lambda r, p: _expect(r, [
             ("collisions", r["collisions"] == 0),
             ("no lane change", r["lane_changes"] == 0 and r["max_lateral_m"] < 1.0),
-            ("kept following", r["final_speed_mps"] > 0.5),
+            ("kept following (stopped < 2 s)", r["stopped_time_s"] < 2.0),
         ]),
     ),
     # The car behind in the target lane speeds up to 6 m/s as the ego starts
@@ -145,7 +145,7 @@ SCENARIOS = {
         check=lambda r, p: _expect(r, [
             ("collisions", r["collisions"] == 0),
             ("no lane change", r["lane_changes"] == 0 and r["max_lateral_m"] < 1.0),
-            ("kept following", r["final_speed_mps"] > 0.5),
+            ("kept following (stopped < 2 s)", r["stopped_time_s"] < 2.0),
         ]),
     ),
     # Goal on the curve: route there and stop on it
@@ -174,7 +174,8 @@ def _goal_args(goal_s, scenario):
     return [f"goal_x:={x:.3f}", f"goal_y:={y:.3f}"]
 
 
-def run_one(planner, scenario, workdir, verbose, spec=None, rate=1.0, domain=None):
+def run_one(planner, scenario, workdir, verbose, spec=None, rate=1.0, domain=None,
+            controller="pure_pursuit"):
     spec = spec or SCENARIOS[scenario]
     duration, check, goal_s = spec["duration"], spec["check"], spec.get("goal_s")
     start = spec.get("start", {})
@@ -200,7 +201,7 @@ def run_one(planner, scenario, workdir, verbose, spec=None, rate=1.0, domain=Non
         ["ros2", "launch", "av_perception", "perception.launch.py"],
         ["ros2", "launch", "av_planning", "planner.launch.py", f"planner_type:={planner}"]
         + (_goal_args(goal_s, spec["scenario"]) if goal_s is not None else []),
-        ["ros2", "launch", "av_control", "controller.launch.py"],
+        ["ros2", "launch", "av_control", "controller.launch.py", f"controller:={controller}"],
     ]
     procs = [subprocess.Popen(c, env=env, stdout=log, stderr=subprocess.STDOUT,
                               start_new_session=True) for c in cmds]
@@ -237,6 +238,11 @@ def main():
     ap.add_argument("--planners", nargs="+", default=["road_graph", "lattice", "mppi"])
     ap.add_argument("--scenarios", nargs="+", default=list(SCENARIOS), choices=list(SCENARIOS))
     ap.add_argument("--workdir", type=Path, default=None, help="keep logs/results here")
+    ap.add_argument("--controller", default="pure_pursuit", choices=["pure_pursuit", "mpc"],
+                    help="controller.launch.py controller (mpc = av_control_cpp)")
+    ap.add_argument("--vehicle", default="legacy", choices=["legacy", "carla"],
+                    help="sim vehicle geometry (sim_node.py): legacy = Pure Pursuit's own model, "
+                         "carla = Model 3 rear-axle bicycle, 3.005 m")
     ap.add_argument("--rate", type=float, default=1.0,
                     help="simulated seconds per wall second (the stack follows /clock)")
     ap.add_argument("--sweep", type=int, default=0, metavar="N",
@@ -249,6 +255,7 @@ def main():
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
+    os.environ["OFFLINE_SIM_VEHICLE"] = args.vehicle      # inherited by every sim_node
     workdir = args.workdir or Path(tempfile.mkdtemp(prefix="offline_sim_"))
     workdir.mkdir(parents=True, exist_ok=True)
     print(f"Logs and results: {workdir}\n")
@@ -262,7 +269,8 @@ def main():
         for scenario in args.scenarios:
             t0 = time.time()
             print(f"▶ {planner:<10} {scenario:<8} …", end="", flush=True)
-            result, failed = run_one(planner, scenario, workdir, args.verbose, rate=args.rate)
+            result, failed = run_one(planner, scenario, workdir, args.verbose, rate=args.rate,
+                                     controller=args.controller)
             status = "PASS" if not failed else "FAIL: " + "; ".join(failed)
             failures += bool(failed)
             print(f" {status}  ({time.time() - t0:.0f} s)")
@@ -308,7 +316,8 @@ def run_sweep(args, workdir) -> int:
         try:
             t0 = time.time()
             result, failed = run_one(planner, sweep.name(params), workdir, args.verbose,
-                                     spec=sweep.build(params), rate=args.rate, domain=domain)
+                                     spec=sweep.build(params), rate=args.rate, domain=domain,
+                                     controller=args.controller)
             return planner, params, result, failed, time.time() - t0
         finally:
             free_domains.append(domain)
