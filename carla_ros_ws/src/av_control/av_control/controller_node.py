@@ -54,12 +54,14 @@ Coordinate conventions
 """
 
 import math
+import signal
 import time
 from typing import Optional
 
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.signals import SignalHandlerOptions
 from rclpy.qos import (
     QoSProfile,
     QoSReliabilityPolicy,
@@ -376,6 +378,12 @@ class PurePursuitController(Node):
     def _p(self, name):
         return self.get_parameter(name).value
 
+    def brake_on_exit(self):
+        """Last word on shutdown: full brake, a few times so it is delivered."""
+        for _ in range(5):
+            self._publish(0.0, 0.0, 1.0)
+            time.sleep(0.04)
+
     def _publish(self, throttle: float, steer: float, brake: float):
         cmd = CarlaEgoVehicleControl()
         cmd.throttle = float(throttle)
@@ -387,14 +395,27 @@ class PurePursuitController(Node):
         self._cmd_pub.publish(cmd)
 
 
+def _raise_interrupt(signum, frame):
+    raise KeyboardInterrupt
+
+
 def main(args=None):
-    rclpy.init(args=args)
+    # Own signal handling: rclpy's handler shuts the context down before we
+    # could publish, and CARLA keeps applying the last command (after a stop
+    # the car drove on and hit a wall). Stop spinning, brake, then shut down.
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+    signal.signal(signal.SIGTERM, _raise_interrupt)
     node = PurePursuitController()
     try:
-        rclpy.spin(node)
+        # spin_once with a timeout, not spin(): Python runs the signal handler
+        # only between waits, and with no traffic (sim stopped) spin() never
+        # returned to it
+        while rclpy.ok():
+            rclpy.spin_once(node, timeout_sec=0.1)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        node.brake_on_exit()
         node.destroy_node()
         rclpy.try_shutdown()
 

@@ -14,7 +14,10 @@
 // (safety.hpp): obstacle corridor + governor (stop-and-hold, time-gap
 // following), end-of-path stop, no-perception hold, stale-trajectory
 // brake and stuck recovery.  Parameter names match controller_node.py.
+#include <atomic>
 #include <chrono>
+#include <csignal>
+#include <thread>
 #include <cmath>
 #include <memory>
 #include <optional>
@@ -144,6 +147,18 @@ public:
 
 private:
   double now_s() {return get_clock()->now().seconds();}
+
+public:
+  // Last word on shutdown: full brake, a few times so it is delivered.
+  void brake_on_exit()
+  {
+    for (int i = 0; i < 5; ++i) {
+      publish(0.0, 0.0, 1.0);
+      std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    }
+  }
+
+private:
 
   void publish(double throttle, double steer, double brake)
   {
@@ -361,10 +376,28 @@ private:
 
 }  // namespace av_control_cpp
 
+namespace
+{
+std::atomic<bool> g_stop{false};
+void on_signal(int) {g_stop = true;}
+}  // namespace
+
 int main(int argc, char ** argv)
 {
-  rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<av_control_cpp::MpcController>());
+  // Own signal handling: rclcpp's handler shuts the context down before any
+  // callback could publish, and CARLA keeps applying the last command — after
+  // a stop the car drove on at 2.8 m/s and hit a wall (CARLA Step 6).  So
+  // stop spinning, brake, then shut down.
+  rclcpp::init(argc, argv, rclcpp::InitOptions(), rclcpp::SignalHandlerOptions::None);
+  std::signal(SIGINT, on_signal);
+  std::signal(SIGTERM, on_signal);
+  auto node = std::make_shared<av_control_cpp::MpcController>();
+  rclcpp::executors::SingleThreadedExecutor exec;
+  exec.add_node(node);
+  while (rclcpp::ok() && !g_stop) {
+    exec.spin_once(std::chrono::milliseconds(50));
+  }
+  node->brake_on_exit();
   rclcpp::shutdown();
   return 0;
 }
