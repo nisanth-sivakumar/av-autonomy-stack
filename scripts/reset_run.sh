@@ -74,6 +74,20 @@ any_alive() {
 # bag is finalised), then SIGTERM after 15 s and SIGKILL after 5 more.
 # Escalation is needed: carla_spawn_objects hangs in shutdown *after* it
 # has destroyed its actors.
+# with_sigint <cmd>...: exec cmd with SIGINT restored to its default. A
+# background job of a non-interactive shell (reset_run.sh started with `&` from
+# a script) starts with SIGINT *ignored*, inherited by everything it launches,
+# and bash can't undo that (`set -m` doesn't). The launches then ignored the
+# clean stop's SIGINT, died at the SIGTERM escalation without their shutdown
+# sequence, and the controller never braked: the car drove on and hit a wall
+# (CARLA Step 6). Only for background starts (`with_sigint cmd &`): it
+# execs, so in the foreground it would replace this script.
+with_sigint() {
+    exec python3 -c 'import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+os.execvp(sys.argv[1], sys.argv[1:])' "$@"
+}
+
 stop_pids() {
     [ $# -eq 0 ] && return 0
     kill -INT "$@" 2>/dev/null || true
@@ -175,7 +189,7 @@ RUN_ID="run_${PLANNER_TYPE}${CTRL_TAG}_$(date +%Y%m%d_%H%M%S)"
 BAG_PATH="bags/$RUN_ID"
 
 echo "==> Starting bag recording → $BAG_PATH"
-ros2 bag record \
+with_sigint ros2 bag record \
     --output "$BAG_PATH" \
     /carla/ego_vehicle/odometry \
     /carla/ego_vehicle/vehicle_control_cmd \
@@ -201,7 +215,7 @@ if [ -n "${EGO_SPAWN:-}" ]; then
 else
     echo "==> Spawning objects (config/objects.json)..."
 fi
-ros2 launch carla_spawn_objects carla_spawn_objects.launch.py \
+with_sigint ros2 launch carla_spawn_objects carla_spawn_objects.launch.py \
     objects_definition_file:="$REPO_ROOT/config/objects.json" "${SPAWN_ARGS[@]}" &
 SPAWN_PID=$!
 if ! wait_for_msg /carla/ego_vehicle/odometry nav_msgs/msg/Odometry 30; then
@@ -212,7 +226,7 @@ echo "    ego odometry OK"
 # ---- Perception ----------------------------------------------------------
 
 echo "==> Launching perception..."
-ros2 launch av_perception perception.launch.py &
+with_sigint ros2 launch av_perception perception.launch.py &
 PERCEP_PID=$!
 if wait_for_msg /perception/obstacles geometry_msgs/msg/PoseArray 20; then
     echo "    /perception/obstacles OK"
@@ -223,7 +237,7 @@ fi
 # ---- Planner -------------------------------------------------------------
 
 echo "==> Launching planner (type: $PLANNER_TYPE)..."
-ros2 launch av_planning planner.launch.py planner_type:="$PLANNER_TYPE" "${GOAL_ARGS[@]}" &
+with_sigint ros2 launch av_planning planner.launch.py planner_type:="$PLANNER_TYPE" "${GOAL_ARGS[@]}" &
 PLANNER_PID=$!
 if ! wait_for_msg /planning/trajectory nav_msgs/msg/Path 30; then
     abort "no /planning/trajectory after 30 s — check the planner output above."
@@ -233,7 +247,7 @@ echo "    /planning/trajectory OK"
 # ---- Controller ----------------------------------------------------------
 
 echo "==> Launching controller ($CONTROLLER)..."
-ros2 launch av_control controller.launch.py controller:="$CONTROLLER" &
+with_sigint ros2 launch av_control controller.launch.py controller:="$CONTROLLER" &
 CTRL_PID=$!
 
 # ---- Summary -------------------------------------------------------------
@@ -253,12 +267,19 @@ stop_run() {
     trap - INT TERM
     echo ""
     echo "==> Stopping run..."
-    ros2 topic pub --once /carla/ego_vehicle/vehicle_control_cmd \
+    # CARLA keeps applying the last command it got. The controllers brake as
+    # their last message on shutdown; this is the backup, sent after the
+    # controller is gone (while it runs, its next command overrides it).
+    # `pub --once` was useless: it published before matching the bridge's
+    # subscription, so the car drove on uncontrolled at 2.8 m/s and hit a
+    # wall in CARLA Step 6. Wait for a subscriber and repeat it for 2 s.
+    stop_pids $CTRL_PID
+    timeout 8 ros2 topic pub -w 1 -t 40 -r 20 /carla/ego_vehicle/vehicle_control_cmd \
         carla_msgs/msg/CarlaEgoVehicleControl \
         '{throttle: 0.0, steer: 0.0, brake: 1.0}' >/dev/null 2>&1 || true
-    # Stack first, then the ego (explicitly, see destroy_ego), then
+    # then the rest of the stack, the ego (explicitly, see destroy_ego),
     # spawn_objects and the bag
-    stop_pids $CTRL_PID $PLANNER_PID $PERCEP_PID
+    stop_pids $PLANNER_PID $PERCEP_PID
     destroy_ego
     stop_pids $SPAWN_PID $BAG_PID
     stop_matching "${NODE_PATTERNS[@]}"   # orphans, if a launch had to be killed
