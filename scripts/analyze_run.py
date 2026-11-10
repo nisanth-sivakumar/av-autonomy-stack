@@ -320,6 +320,19 @@ def analyze(bag_path: Path, output_dir: Path, show: bool):
         acc = np.gradient(moving["speed"].to_numpy(), ts)
         jerk = float(np.sqrt(np.mean(np.gradient(acc, ts) ** 2)))
     comp = np.asarray(data["compute"], float)
+    # Tracking: skip the first 3 s of motion, where the error is the spawn
+    # point's offset from the lane (0.6 m at the default spawn), not tracking,
+    # and stop at the controller's last command (the car rolls on after it
+    # stops until the stop script's brake, or, in older bags, the ego is gone)
+    track_cte = None
+    if len(moving):
+        t_go = float(moving["t_sim"].iloc[0])
+        # last command that isn't a full brake (reset_run.sh brakes at the end)
+        drive = ctl[ctl["brake"] < 0.99]
+        t_end = float(drive["t"].max()) if len(drive) else float(moving["t"].max())
+        win = moving[(moving["t_sim"] > t_go + 3.0) & (moving["t"] <= t_end)]
+        tc = np.abs(win["cte"].dropna())
+        track_cte = float(tc.max()) if len(tc) else None
 
     def fmt(v, spec=".3f", unit=""):
         return "n/a" if v is None or (isinstance(v, float) and math.isnan(v)) else f"{v:{spec}}{unit}"
@@ -334,6 +347,7 @@ def analyze(bag_path: Path, output_dir: Path, show: bool):
         "Max speed (m/s)":               fmt(float(odom["speed"].max()), ".2f"),
         "Mean |CTE| vs plan (m)":        fmt(float(abs_cte.mean()) if len(abs_cte) else None),
         "Max |CTE| vs plan (m)":         fmt(float(abs_cte.max()) if len(abs_cte) else None),
+        "Max |CTE| tracking (m)":        fmt(track_cte),   # moving, after the start
         # steer command units (normalized by 70 deg) per simulated second
         "Steering rate RMS (1/s, sim)":  fmt(compute_jerk(ctl["steer"].values, ctl["t"].values)
                                              / sim_per_wall, ".4f"),
