@@ -110,6 +110,12 @@ public:
           waypoints_.push_back({ps.pose.position.x, ps.pose.position.y});
         }
         traj_stamp_ = now_s();
+        // MPC reference: the road behind the new plan's start comes from the
+        // previous reference path (see back_from_previous)
+        std::vector<Point> prev(ref_back_);
+        prev.insert(prev.end(), plan_.begin(), plan_.end());
+        ref_back_ = back_from_previous(prev, waypoints_, kRefBackLength);
+        plan_ = waypoints_;
       });
     obj_sub_ = create_subscription<derived_object_msgs::msg::ObjectArray>(
       "/perception/objects", 10, [this](derived_object_msgs::msg::ObjectArray::SharedPtr m) {
@@ -234,12 +240,7 @@ private:
     // ── Lateral: MPC about the rear axle ──
     const double rx = px - rear_axle_offset_ * std::cos(yaw);
     const double ry = py - rear_axle_offset_ * std::sin(yaw);
-    std::vector<Point> path(waypoints_);
-    if (path.size() < 2) {
-      path.insert(path.begin(), Point{px, py});
-    }
-    // cover the rear axle: extend back along the road's sustained curvature
-    path = extend_back(path, sustained_curvature(path), rear_axle_offset_ + 4.5);
+    const std::vector<Point> path = reference_path(px, py);
     const Reference ref = build_reference(path, rx, ry, yaw, speed, mpc_->config());
     const MpcResult res = mpc_->solve(ref, speed, prev_delta_);
     std_msgs::msg::Float32 tmsg;
@@ -297,6 +298,35 @@ private:
     publish(throttle, steer, brake);
   }
 
+  // Reference path for the MPC: the trail behind the plan's start (from the
+  // previous plans) + the whole latest plan (unpruned: it starts at or ahead of
+  // the vehicle centre, and the rear axle is 1.5 m behind that).
+  std::vector<Point> reference_path(double px, double py) const
+  {
+    std::vector<Point> path(ref_back_);
+    path.insert(path.end(), plan_.begin(), plan_.end());
+    if (plan_.size() < 2) {
+      path = waypoints_;
+      if (path.size() < 2) {
+        path.insert(path.begin(), Point{px, py});
+      }
+    }
+    double trail = 0.0;
+    for (std::size_t i = 0; i < ref_back_.size(); ++i) {
+      const Point & a = ref_back_[i];
+      const Point & b = i + 1 < ref_back_.size() ? ref_back_[i + 1] : plan_.front();
+      trail += std::hypot(b.x - a.x, b.y - a.y);
+    }
+    const double needed = rear_axle_offset_ + 4.5;   // plan start up to ~3 m ahead of the centre
+    if (trail < needed) {
+      // no (or too short a) trail yet — first plan, or a new route: fall back
+      // to extending along the plan's sustained curvature
+      path = extend_back(path, sustained_curvature(plan_.size() >= 2 ? plan_ : path),
+          needed - trail);
+    }
+    return path;
+  }
+
   // parameters
   double target_speed_, kp_speed_, kp_brake_, max_steer_, ego_half_length_;
   int64_t debug_interval_;
@@ -314,6 +344,8 @@ private:
   std::vector<Point> waypoints_;
   std::vector<Obstacle> objects_, points_;
   std::optional<double> traj_stamp_, objects_stamp_, points_stamp_;
+  std::vector<Point> plan_, ref_back_;   // MPC reference: latest plan, trail behind it
+  static constexpr double kRefBackLength = 10.0;   // m of trail kept
   std::optional<double> pushing_since_, recover_until_;
   int stuck_retries_{0};
   int64_t tick_{0};

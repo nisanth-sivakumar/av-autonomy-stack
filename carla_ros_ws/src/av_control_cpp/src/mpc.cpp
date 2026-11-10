@@ -184,6 +184,71 @@ std::vector<Point> extend_back(const std::vector<Point> & path, double kappa, do
   return out;
 }
 
+std::vector<Point> back_from_previous(const std::vector<Point> & prev,
+                                      const std::vector<Point> & next, double length,
+                                      double max_offset, double max_rotation)
+{
+  std::vector<Point> out;
+  if (prev.size() < 2 || next.size() < 2) {
+    return out;
+  }
+  const Point n0 = next[0];
+  // projection of next[0] onto prev (closest point over all segments)
+  double best = std::numeric_limits<double>::infinity();
+  std::size_t seg = 0;
+  double seg_t = 0.0;
+  for (std::size_t i = 0; i + 1 < prev.size(); ++i) {
+    const double dx = prev[i + 1].x - prev[i].x, dy = prev[i + 1].y - prev[i].y;
+    const double l = std::hypot(dx, dy);
+    if (l < 1e-2) {
+      continue;
+    }
+    const double t = std::clamp(((n0.x - prev[i].x) * dx + (n0.y - prev[i].y) * dy) / l, 0.0, l);
+    const double d = std::hypot(n0.x - (prev[i].x + t * dx / l), n0.y - (prev[i].y + t * dy / l));
+    if (d < best - 1e-9) {
+      best = d;
+      seg = i;
+      seg_t = t;
+    }
+  }
+  if (!std::isfinite(best) || best > max_offset) {
+    return out;
+  }
+  const double sdx = prev[seg + 1].x - prev[seg].x, sdy = prev[seg + 1].y - prev[seg].y;
+  const double sl = std::hypot(sdx, sdy);
+  // a projection at a segment's very end belongs to the next segment: compare
+  // like chords (the one leaving the point), or a vertex's own turn reads as
+  // a rotation
+  std::size_t hseg = seg;
+  if (seg_t > sl - 1e-3 && seg + 2 < prev.size()) {
+    hseg = seg + 1;
+  }
+  const double h_prev = std::atan2(prev[hseg + 1].y - prev[hseg].y, prev[hseg + 1].x - prev[hseg].x);
+  const double h_next = std::atan2(next[1].y - next[0].y, next[1].x - next[0].x);
+  const double rot = std::remainder(h_next - h_prev, 2.0 * M_PI);
+  if (std::abs(rot) > max_rotation) {
+    return out;
+  }
+  const Point p{prev[seg].x + seg_t * sdx / sl, prev[seg].y + seg_t * sdy / sl};
+  const double c = std::cos(rot), s = std::sin(rot);
+  auto place = [&](const Point & q) {
+      const double dx = q.x - p.x, dy = q.y - p.y;
+      return Point{n0.x + c * dx - s * dy, n0.y + s * dx + c * dy};
+    };
+  // walk prev backwards from the projection
+  double acc = seg_t;
+  std::vector<Point> rev;
+  if (seg_t > 1e-3) {
+    rev.push_back(place(prev[seg]));
+  }
+  for (std::size_t i = seg; i > 0 && acc < length; --i) {
+    acc += std::hypot(prev[i].x - prev[i - 1].x, prev[i].y - prev[i - 1].y);
+    rev.push_back(place(prev[i - 1]));
+  }
+  out.assign(rev.rbegin(), rev.rend());
+  return out;
+}
+
 StepModel linearize(double v, double kappa, const MpcConfig & cfg)
 {
   const double vm = std::max(v, cfg.min_model_speed);

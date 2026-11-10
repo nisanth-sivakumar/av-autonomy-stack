@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstdio>
 #include <vector>
 
 #include "av_control_cpp/mpc.hpp"
+#include "av_control_cpp/safety.hpp"
 
+using av_control_cpp::back_from_previous;
 using av_control_cpp::build_reference;
 using av_control_cpp::delta_to_carla_steer;
 using av_control_cpp::extend_back;
@@ -299,3 +302,128 @@ TEST(Reference, CurvatureAtTheFirstSegmentIsTheArcs)
   EXPECT_NEAR(r.kappa[0], 1.0 / R, 0.002);
 }
 
+
+// ── Reference behind the plan's start (from the previous plans) ──
+
+namespace
+{
+
+// CARLA-like junction: 30 m straight, 90 deg left turn R 14 m, straight
+void road_pose(double s, double & x, double & y, double & h)
+{
+  const double s1 = 30.0, r = 14.0, arc_len = r * M_PI / 2.0;
+  if (s <= s1) {
+    x = s; y = 0.0; h = 0.0;
+  } else if (s <= s1 + arc_len) {
+    const double a = (s - s1) / r;
+    x = s1 + r * std::sin(a); y = r * (1.0 - std::cos(a)); h = a;
+  } else {
+    x = s1 + r; y = r + (s - s1 - arc_len); h = M_PI / 2.0;
+  }
+}
+
+// The planner's path: road-graph vertices every 3 m, starting at the first
+// one ahead of the vehicle centre (as in CARLA: 0-3 m ahead)
+std::vector<Point> grid_plan(double s_centre, double len = 60.0)
+{
+  std::vector<Point> p;
+  for (double sv = std::floor(s_centre / 3.0) * 3.0 + 3.0; sv <= s_centre + len; sv += 3.0) {
+    double x, y, h;
+    road_pose(sv, x, y, h);
+    p.push_back({x, y});
+  }
+  return p;
+}
+
+struct Worst
+{
+  double e_y{0.0};
+  double e_psi{0.0};
+};
+
+// Drive the rear axle exactly along the road and record the reference error
+// the MPC would see; `history` selects the trail from previous plans.
+Worst drive_through_turn(bool history)
+{
+  MpcConfig cfg;
+  std::vector<Point> back, plan;
+  Worst w;
+  for (double sr = 2.0; sr < 75.0; sr += 0.15) {
+    double rx, ry, h;
+    road_pose(sr, rx, ry, h);
+    const std::vector<Point> next = grid_plan(sr + 1.5);
+    std::vector<Point> path;
+    if (history) {
+      std::vector<Point> prev(back);
+      prev.insert(prev.end(), plan.begin(), plan.end());
+      back = back_from_previous(prev, next);
+      plan = next;
+      path = back;
+      path.insert(path.end(), plan.begin(), plan.end());
+      if (back.empty()) {
+        path = extend_back(plan, 0.0, 6.0);     // first plan: on the straight
+      }
+    } else {
+      path = extend_back(next, av_control_cpp::sustained_curvature(next), 6.0);
+    }
+    const auto ref = build_reference(path, rx, ry, h, 3.0, cfg);
+    EXPECT_TRUE(ref.valid);
+    w.e_y = std::max(w.e_y, std::abs(ref.e_y));
+    w.e_psi = std::max(w.e_psi, std::abs(ref.e_psi));
+  }
+  return w;
+}
+
+}  // namespace
+
+TEST(Reference, BackFromPreviousOnTheSameLineIsExact)
+{
+  const auto line = arc(14.0, 60.0);
+  const std::vector<Point> next(line.begin() + 6, line.end());
+  const auto back = back_from_previous(line, next, 10.0);
+  ASSERT_GE(back.size(), 3u);
+  for (std::size_t i = 0; i < back.size(); ++i) {
+    const Point & want = line[6 - back.size() + i];
+    EXPECT_NEAR(back[i].x, want.x, 1e-9);
+    EXPECT_NEAR(back[i].y, want.y, 1e-9);
+  }
+}
+
+TEST(Reference, BackFromPreviousFollowsASidewaysReplan)
+{
+  // a lattice replan 0.3 m to the left of the previous one, same shape
+  const auto prev = straight(0.0);
+  auto next = straight(0.3);
+  next.erase(next.begin(), next.begin() + 4);
+  const auto back = back_from_previous(prev, next, 6.0);
+  ASSERT_FALSE(back.empty());
+  for (const auto & p : back) {
+    EXPECT_NEAR(p.y, 0.3, 1e-9);   // moved with the new plan: no kink at the join
+    EXPECT_LT(p.x, next[0].x);
+  }
+}
+
+TEST(Reference, BackFromPreviousRejectsANewRoute)
+{
+  const auto prev = straight(0.0);
+  auto far = straight(3.5);                       // a lane away
+  EXPECT_TRUE(back_from_previous(prev, far).empty());
+  std::vector<Point> crossing{{10.0, 0.0}, {10.0, 3.0}, {10.0, 6.0}};   // 90 deg off
+  EXPECT_TRUE(back_from_previous(prev, crossing).empty());
+}
+
+TEST(Reference, ContinuousThroughCurveEntryAndExit)
+{
+  // Regression for CARLA Step 6: extrapolating the plan backwards read
+  // 20-30 deg heading errors on a car that was exactly on the road.
+  const Worst old = drive_through_turn(false);
+  const Worst now = drive_through_turn(true);
+  std::printf("old: e_y %.3f m, e_psi %.3f rad; trail: e_y %.3f m, e_psi %.3f rad\n",
+              old.e_y, old.e_psi, now.e_y, now.e_psi);
+  EXPECT_GT(old.e_psi, 0.2);                       // the old extension's failure
+  EXPECT_LT(now.e_y, 0.05);
+  // what remains is the 3 m polyline itself: where the straight meets the
+  // arc, the vertex heading (mean of the two chords) is a quarter of a chord's
+  // turn (3/14 rad) off the road's
+  EXPECT_LT(now.e_psi, 0.08);
+}

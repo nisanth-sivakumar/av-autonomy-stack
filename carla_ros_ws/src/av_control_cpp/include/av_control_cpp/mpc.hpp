@@ -79,6 +79,26 @@ Reference build_reference(const std::vector<Point> & path, double rx, double ry,
 std::vector<Point> extend_back(const std::vector<Point> & path, double kappa,
                                double length = 6.0, double step = 1.5);
 
+// The path behind `next`'s first point, taken from the previous reference
+// path `prev`: the piece of `prev` up to the projection of next[0] (at most
+// `length` m of it), moved rigidly so that it ends at next[0] with the
+// heading of next's first segment.  Returned far-to-near, without next[0].
+//
+// Why: the planner's path starts at a 3 m grid point at or ahead of the
+// vehicle centre (CARLA and offline alike), 1.5-4.5 m ahead of the rear axle.
+// Extending it backwards by extrapolation (straight, or along the curvature
+// ahead) is wrong wherever the road behind differs from the road ahead — at
+// every curve entry and exit: e_psi read 20-30 deg on a car that was on the
+// path, and CARLA junction turns tracked at 0.6 m.  The previous plan holds
+// the road behind.  The rigid alignment keeps it continuous with the new
+// plan when a lattice/MPPI replan shifts sideways (stitching the old points
+// unmoved put a kink at the rear axle).  Empty if next[0] is more than
+// `max_offset` m from `prev`, or the headings differ by more than
+// `max_rotation` rad (a new route, not a replan): use extend_back then.
+std::vector<Point> back_from_previous(const std::vector<Point> & prev,
+                                      const std::vector<Point> & next, double length = 10.0,
+                                      double max_offset = 2.0, double max_rotation = 0.35);
+
 // Discrete model at one step: e[k+1] = A e[k] + B (delta - delta_ref) — A, B
 // returned as (a12, b2): A = [[1, a12], [0, 1]], B = [0, b2].
 struct StepModel
