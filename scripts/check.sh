@@ -36,6 +36,20 @@ CHECK_RATE="${CHECK_RATE:-4}"
 
 step() { echo; echo "==> $*"; }
 
+# fail TITLE FILE: report a failing step and exit.  On GitHub Actions the tail
+# of FILE also goes into an error annotation, shown on the run's summary page
+# (and readable through the public API, unlike the job log).
+fail() {
+    echo "FAIL: $1"
+    if [ -n "${GITHUB_ACTIONS:-}" ] && [ -f "$2" ]; then
+        local msg
+        msg=$(tail -n 60 "$2" | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')
+        echo "::error title=check.sh: $1::$msg"
+    fi
+    exit 1
+}
+LOGDIR="$(mktemp -d)"
+
 # ROS environment (the setup scripts reference unset variables, so no `set -u`)
 if [ -z "${ROS_DISTRO:-}" ]; then
     # shellcheck disable=SC1091
@@ -45,18 +59,28 @@ fi
 cd "$REPO_ROOT/carla_ros_ws"
 
 step "Build (${PACKAGES[*]} and their dependencies)"
-colcon build --symlink-install --packages-up-to "${PACKAGES[@]}" \
-    --event-handlers console_cohesion+ 2>&1 | tail -n 40
+if ! colcon build --symlink-install --packages-up-to "${PACKAGES[@]}" \
+        --event-handlers console_cohesion+ > "$LOGDIR/build.log" 2>&1; then
+    tail -n 80 "$LOGDIR/build.log"
+    fail "build" "$LOGDIR/build.log"
+fi
+tail -n 5 "$LOGDIR/build.log"
 # shellcheck disable=SC1091
 source install/setup.bash
 
 step "Unit tests"
-colcon test --packages-select "${PACKAGES[@]}" >/dev/null
-# colcon test always exits 0; test-result exits non-zero on any failure
-if ! colcon test-result --verbose --test-result-base build; then
-    echo "FAIL: unit tests"
-    exit 1
+# colcon test exits 0 on test failures (test-result catches those), non-zero
+# when a test step itself errors
+if ! colcon test --packages-select "${PACKAGES[@]}" --event-handlers console_cohesion+ \
+        > "$LOGDIR/test.log" 2>&1; then
+    tail -n 80 "$LOGDIR/test.log"
+    fail "colcon test" "$LOGDIR/test.log"
 fi
+if ! colcon test-result --verbose --test-result-base build > "$LOGDIR/result.log" 2>&1; then
+    cat "$LOGDIR/result.log"
+    fail "unit tests" "$LOGDIR/result.log"
+fi
+tail -n 1 "$LOGDIR/result.log"
 
 if [ "$QUICK" = 1 ]; then
     echo; echo "==> check --quick passed"
@@ -76,8 +100,7 @@ for ctl in "pure_pursuit legacy" "mpc carla"; do
     echo "--- controller $1, vehicle $2"
     if ! python3 scripts/offline_sim/run_scenarios.py --controller "$1" --vehicle "$2" --rate "$CHECK_RATE" \
             --workdir "$out" | tee "$out/summary.txt"; then
-        echo "FAIL: offline scenarios, $1 (see $out)"
-        exit 1
+        fail "offline scenarios, $1 (see $out)" "$out/summary.txt"
     fi
 done
 
