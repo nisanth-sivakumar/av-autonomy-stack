@@ -73,7 +73,7 @@ public:
     corridor_.heading_check_m = declare_parameter("heading_check_m", 4.5);
     const double follow_time_gap = declare_parameter("follow_time_gap_s", 1.0);
     const double follow_gain = declare_parameter("follow_gain", 0.5);
-    end_stop_margin_ = declare_parameter("end_stop_margin_m", 1.0);
+    end_stop_margin_ = declare_parameter("end_stop_margin_m", 0.2);
     stuck_speed_ = declare_parameter("stuck_speed_thresh", 0.2);
     stuck_timeout_ = declare_parameter("stuck_timeout", 3.0);
     stuck_recovery_ = declare_parameter("stuck_recovery_time", 2.0);

@@ -130,7 +130,7 @@ class PurePursuitController(Node):
         self.declare_parameter("follow_gain",            0.5)   # 1/s, gap-error → speed
 
         # End of path (goal / dead end)
-        self.declare_parameter("end_stop_margin_m",   1.0)
+        self.declare_parameter("end_stop_margin_m",   0.2)
 
         # Stuck detection / recovery
         self.declare_parameter("stuck_speed_thresh",  0.2)   # m/s

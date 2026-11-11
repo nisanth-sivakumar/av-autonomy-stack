@@ -81,7 +81,7 @@ from av_planning.lattice_planner import LatticePlanner, LatticeConfig
 from av_planning.mppi_planner import MPPIPlanner, MPPIConfig
 from av_planning.obstacles import (
     Obstacle, DEFAULT_HALF_LENGTH, DEFAULT_HALF_WIDTH, as_obstacle_array)
-from av_planning.route_planner import RouteGraph, Segment
+from av_planning.route_planner import RouteGraph, Segment, end_path_at_goal
 
 try:
     import carla
@@ -627,7 +627,8 @@ class RoadGraphPlanner(Node):
     def _walk_graph(self, start_wp, step, count):
         """
         Walk `count` steps along the road graph from start_wp.  With a goal,
-        stop at the waypoint closest to it, so the path ends at the goal.
+        stop at the waypoint closest to it and end the path exactly at the
+        goal (end_path_at_goal), so the car stops there.
         """
         wps, current = [], start_wp
         route = [start_wp]
@@ -640,7 +641,10 @@ class RoadGraphPlanner(Node):
             if goal is not None:
                 d_cur = math.dist(wp_xy(current), goal)
                 if d_cur <= step and math.dist(wp_xy(nxt), goal) > d_cur:
-                    break   # current is the closest waypoint to the goal
+                    # current is the closest waypoint to the goal: end the
+                    # path at the goal itself, not up to half a step from it
+                    wps = end_path_at_goal(wps, goal)
+                    break
             current = nxt
             route.append(current)
             x, y = wp_xy(current)

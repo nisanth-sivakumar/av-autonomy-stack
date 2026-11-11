@@ -297,3 +297,46 @@ def test_oncoming_car_on_a_curve_stays_in_its_lane_with_ref():
                           ref=(ref_xy, ref_yaw), **kw).min()
     assert straight < 1.0                   # the tangent prediction crosses our lane
     assert along == pytest.approx(3.5 - 0.9, abs=0.1)
+
+
+# ── 4.0.5: path ends exactly at the goal ────────────────────────────────
+
+def _straight(n, step=3.0):
+    return [(step * i, 0.0, 0.0) for i in range(1, n + 1)]
+
+
+def test_goal_appended_when_ahead_of_last_waypoint():
+    from av_planning.route_planner import end_path_at_goal
+    out = end_path_at_goal(_straight(5), (16.2, 0.0))
+    assert out[:-1] == _straight(5)
+    assert out[-1] == pytest.approx((16.2, 0.0, 0.0))
+
+
+def test_goal_replaces_waypoint_that_overshoots_it():
+    from av_planning.route_planner import end_path_at_goal
+    out = end_path_at_goal(_straight(5), (13.9, 0.0))   # last waypoint (15) is past it
+    assert [p[0] for p in out] == pytest.approx([3, 6, 9, 12, 13.9])
+    assert out[-1][2] == pytest.approx(0.0)
+
+
+def test_goal_replaces_waypoint_closer_than_min_gap():
+    from av_planning.route_planner import end_path_at_goal
+    out = end_path_at_goal(_straight(5), (15.3, 0.0))
+    assert [p[0] for p in out] == pytest.approx([3, 6, 9, 12, 15.3])
+
+
+def test_goal_heading_follows_the_last_chord_on_a_curve():
+    from av_planning.route_planner import end_path_at_goal
+    r = 14.0
+    arc = [(r * math.sin(a), r - r * math.cos(a), a) for a in np.arange(0.2, 1.21, 0.2)]
+    g_ang = 1.3
+    goal = (r * math.sin(g_ang), r - r * math.cos(g_ang))
+    out = end_path_at_goal(arc, goal)
+    assert out[-1][:2] == pytest.approx(goal)
+    assert len(out) == len(arc) + 1
+    assert out[-1][2] == pytest.approx((1.2 + 1.3) / 2, abs=1e-6)   # chord heading
+
+
+def test_goal_only_path_when_walk_is_empty():
+    from av_planning.route_planner import end_path_at_goal
+    assert end_path_at_goal([], (1.0, 2.0)) == [(1.0, 2.0, 0.0)]

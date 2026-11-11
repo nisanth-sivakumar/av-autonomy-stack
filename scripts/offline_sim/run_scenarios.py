@@ -154,7 +154,7 @@ SCENARIOS = {
         check=lambda r, p: _expect(r, [
             ("collisions", r["collisions"] == 0),
             ("stopped", r["final_speed_mps"] < 0.1),
-            ("stopped within 2 m of the goal", abs(r["goal_error_m"]) <= 2.0),
+            ("stopped within 0.5 m of the goal", abs(r["goal_error_m"]) <= 0.5),
         ]),
     ),
 }

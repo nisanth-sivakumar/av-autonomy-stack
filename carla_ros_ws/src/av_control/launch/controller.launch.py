@@ -32,8 +32,10 @@ SHARED = {
     'follow_gain':            0.5,
     'ego_half_length':        2.40,   # CARLA Model 3 bounding box
 
-    # Stop this far before the end of the path (goal / dead end)
-    'end_stop_margin_m':      1.0,
+    # Stop this far before the end of the path (goal / dead end). The planner
+    # ends a goal path at the goal itself (4.0.5); 0.2 m allows for the roll
+    # after the stop (0.0 overshot by 0.2-0.4 m offline)
+    'end_stop_margin_m':      0.2,
 
     # Stuck recovery
     'stuck_timeout':          3.0,

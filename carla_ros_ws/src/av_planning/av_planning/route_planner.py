@@ -89,3 +89,35 @@ class RouteGraph:
                     parent[nxt] = key
                     heapq.heappush(open_heap, (cand + h(nxt), next(tie), nxt))
         return None
+
+
+def end_path_at_goal(
+    path: Sequence[tuple[float, float, float]],
+    goal: tuple[float, float],
+    min_gap: float = 0.5,
+) -> list[tuple[float, float, float]]:
+    """
+    End a path of (x, y, yaw) waypoints exactly at `goal`.
+
+    The road-graph walk ends at the waypoint closest to the goal, which is up
+    to half a step (1.5 m) before or past it, and the controller stops at the
+    path's end — so the stop was bounded by the waypoint spacing.  Waypoints
+    past the goal (along their own heading) or within `min_gap` of it are
+    dropped, then the goal is appended, heading along the chord from the new
+    last waypoint (or the dropped waypoint's heading if none is left).
+    """
+    out = list(path)
+    yaw = out[-1][2] if out else 0.0
+    gx, gy = goal
+    while out:
+        x, y, h = out[-1]
+        past = (gx - x) * math.cos(h) + (gy - y) * math.sin(h) < 0.0
+        if past or math.hypot(gx - x, gy - y) < min_gap:
+            yaw = h
+            out.pop()
+        else:
+            break
+    if out:
+        yaw = math.atan2(gy - out[-1][1], gx - out[-1][0])
+    out.append((gx, gy, yaw))
+    return out
