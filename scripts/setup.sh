@@ -56,14 +56,16 @@ if [ ! -e /etc/ros/rosdep/sources.list.d/20-default.list ]; then
     $SUDO rosdep init
 fi
 rosdep update --rosdistro humble
-$SUDO apt-get update -qq
 # Only this project's packages: the rest of ros-bridge isn't built (check.sh
 # builds --packages-up-to), and some of its packages have keys rosdep can't resolve.
 cd "$REPO_ROOT/carla_ros_ws"
-rosdep install -y --rosdistro humble --from-paths \
-    src/av_control src/av_control_cpp src/av_planning src/av_perception \
-    src/ros-bridge/carla_msgs \
-    --ignore-src
+PATHS=(src/av_control src/av_control_cpp src/av_planning src/av_perception src/ros-bridge/carla_msgs)
+if rosdep check --rosdistro humble --from-paths "${PATHS[@]}" --ignore-src; then
+    echo "all ROS dependencies installed"
+else
+    $SUDO apt-get update -qq
+    rosdep install -y --rosdistro humble --from-paths "${PATHS[@]}" --ignore-src
+fi
 
 if [ "$ANALYSIS" = 1 ]; then
     step "Bag-analysis packages (scripts/analyze_run.py)"
