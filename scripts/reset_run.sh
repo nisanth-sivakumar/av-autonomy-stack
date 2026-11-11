@@ -13,6 +13,8 @@
 #                                           # spawn elsewhere (ROS frame, as in objects.json)
 #   CONTROLLER=mpc ./scripts/reset_run.sh mppi
 #                                           # LTV MPC (av_control_cpp) instead of Pure Pursuit
+#   RECORD_VIEW=1 ./scripts/reset_run.sh mppi
+#                                           # also record the chase camera (scripts/make_demo_gif.py)
 #
 # Prerequisites: CARLA server running (Windows) and carla_ros_bridge running
 # in another terminal. Can be run from any directory.
@@ -189,8 +191,15 @@ RUN_ID="run_${PLANNER_TYPE}${CTRL_TAG}_$(date +%Y%m%d_%H%M%S)"
 BAG_PATH="bags/$RUN_ID"
 
 echo "==> Starting bag recording → $BAG_PATH"
+# RECORD_VIEW=1 also records the chase camera, for scripts/make_demo_gif.py
+# (800x600 raw images: ~1 GB per minute of simulated time)
+EXTRA_TOPICS=()
+if [ "${RECORD_VIEW:-0}" = 1 ]; then
+    EXTRA_TOPICS+=(/carla/ego_vehicle/rgb_view/image)
+fi
 with_sigint ros2 bag record \
     --output "$BAG_PATH" \
+    "${EXTRA_TOPICS[@]}" \
     /carla/ego_vehicle/odometry \
     /carla/ego_vehicle/vehicle_control_cmd \
     /carla/ego_vehicle/speedometer \
