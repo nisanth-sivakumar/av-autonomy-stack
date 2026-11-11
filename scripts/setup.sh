@@ -32,7 +32,7 @@ step() { echo; echo "==> $*"; }
 SUDO=sudo
 if [ "$(id -u)" = 0 ]; then SUDO=""; fi
 
-if [ -z "${ROS_DISTRO:-}" ]; then
+if [ -z "${AMENT_PREFIX_PATH:-}" ]; then   # ROS not sourced (ROS_DISTRO alone, as in ros:humble, isn't enough)
     # shellcheck disable=SC1091
     source /opt/ros/humble/setup.bash
 fi
