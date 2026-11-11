@@ -1,0 +1,39 @@
+# Build and unit tests on every push and pull request: scripts/setup.sh, then
+# scripts/check.sh --quick (the same steps as the README).
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-22.04
+    container: ros:humble
+    timeout-minutes: 45
+    steps:
+      - name: Install git
+        run: apt-get update -qq && apt-get install -y -qq git
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Trust the checkout (container runs as root)
+        run: git config --global --add safe.directory '*'
+
+      - name: Setup (submodule, bridge patch, rosdep)
+        shell: bash
+        run: ./scripts/setup.sh
+
+      - name: Build and unit tests
+        shell: bash
+        run: ./scripts/check.sh --quick
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: carla_ros_ws/build/*/test_results/
+          if-no-files-found: ignore

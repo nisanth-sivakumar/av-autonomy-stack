@@ -1,0 +1,47 @@
+# Full check: build, unit tests and every offline closed-loop scenario with
+# both controllers (scripts/check.sh). Nightly, on pull requests to main and
+# on demand. Scenario results are uploaded as artifacts.
+name: Offline scenarios
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  scenarios:
+    runs-on: ubuntu-22.04
+    container: ros:humble
+    timeout-minutes: 90
+    steps:
+      - name: Install git
+        run: apt-get update -qq && apt-get install -y -qq git
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Trust the checkout (container runs as root)
+        run: git config --global --add safe.directory '*'
+
+      - name: Setup (submodule, bridge patch, rosdep)
+        shell: bash
+        run: ./scripts/setup.sh
+
+      - name: Build, unit tests, offline scenarios
+        shell: bash
+        env:
+          # The sim runs several ROS nodes per scenario; a 4-core runner keeps
+          # up at 2x (the local gate uses 4x on 12 cores).
+          CHECK_RATE: "2"
+        run: ./scripts/check.sh
+
+      - name: Upload scenario results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-scenarios
+          path: log/check/offline_sim/
+          if-no-files-found: ignore

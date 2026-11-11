@@ -3,6 +3,7 @@
 #
 #   ./scripts/check.sh            # build + unit tests + offline scenarios, both controllers (~9 min)
 #   ./scripts/check.sh --quick    # build + unit tests only
+#   CHECK_RATE=2 ./scripts/check.sh   # offline sim speed-up (default 4; CI uses less on small runners)
 #
 # Steps:
 #   1. colcon build of the stack and its dependencies (carla_msgs etc. from ros-bridge)
@@ -23,7 +24,7 @@ QUICK=0
 for arg in "$@"; do
     case "$arg" in
         --quick) QUICK=1 ;;
-        -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
         *) echo "unknown argument: $arg (expected --quick)"; exit 2 ;;
     esac
 done
@@ -31,6 +32,7 @@ done
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACKAGES=(av_control av_control_cpp av_planning av_perception)
 CHECK_OUT="${CHECK_OUT:-$REPO_ROOT/log/check/offline_sim}"
+CHECK_RATE="${CHECK_RATE:-4}"
 
 step() { echo; echo "==> $*"; }
 
@@ -72,7 +74,7 @@ for ctl in "pure_pursuit legacy" "mpc carla"; do
     out="$CHECK_OUT/$1"
     mkdir -p "$out"
     echo "--- controller $1, vehicle $2"
-    if ! python3 scripts/offline_sim/run_scenarios.py --controller "$1" --vehicle "$2" --rate 4 \
+    if ! python3 scripts/offline_sim/run_scenarios.py --controller "$1" --vehicle "$2" --rate "$CHECK_RATE" \
             --workdir "$out" | tee "$out/summary.txt"; then
         echo "FAIL: offline scenarios, $1 (see $out)"
         exit 1
